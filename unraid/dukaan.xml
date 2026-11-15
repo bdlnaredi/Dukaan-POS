@@ -18,6 +18,8 @@
   <License>GPL-3.0</License>
   <Requires>TallyPrime with its XML server on (F1 Help › Settings › Connectivity: acts as Both, port 9000) on a PC this server can reach. Setup guide: https://github.com/bdlnaredi/Dukaan-POS/blob/main/docs/INSTALL.md. For camera scanning and installing on phones, reach it over https (Cloudflare Tunnel or Tailscale).</Requires>
   <Changes>
+### 0.1.1
+- Fixed: typing in the password, quantity, price and cash boxes
 ### 0.1.0
 - First version: counter billing with GST, offline billing, thermal printing, WhatsApp, and bills into TallyPrime
 Full list: https://github.com/bdlnaredi/Dukaan-POS/blob/main/CHANGELOG.md

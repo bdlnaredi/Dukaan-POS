@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.1
+- Fixed: typing in the owner password, quantity, price and cash received boxes did nothing (only Enter got through)
+
 ## 0.1.0 (first version)
 - Counter billing on phone, tablet or PC: search, barcode scanning (USB/Bluetooth scanner or camera), favourites, loose items by weight or amount, hold bills
 - GST tax invoices (and bills of supply) with HSN, rate-wise CGST/SGST, place of supply; GST rates and HSN from Tally; selling above MRP blocked

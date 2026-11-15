@@ -83,7 +83,9 @@ try:
         pg.click(".fav:has-text('Basmati')")
         pg.wait_for_selector("#qq")
         pg.click(".quick button[data-q='1']")
-        pg.fill("#qa", "45")
+        pg.click("#qa")
+        pg.keyboard.type("45")
+        assert pg.input_value("#qa") == "45", "typing in the amount box"
         pg.screenshot(path=f"{SHOTS}/03-loose.png")
         pg.click("#qOk")
         pg.click(".fav:has-text('Ghee')")
@@ -95,7 +97,9 @@ try:
         print("cart total", total)
         pg.click("#payBtn")
         pg.wait_for_selector(".paytot")
-        pg.click(".quick button >> nth=2")
+        pg.click("#tend")
+        pg.keyboard.type("900")
+        assert pg.input_value("#tend") == "900", "typing cash received"
         pg.screenshot(path=f"{SHOTS}/05-pay-cash.png")
         pg.click(".modes button[data-m='upi']")
         pg.wait_for_selector(".qr svg")
@@ -175,7 +179,9 @@ try:
         o.on("pageerror", lambda e: errors.append(str(e)))
         o.goto(BASE)
         o.click("#login .seg button[data-k='owner']")
-        o.fill("#lgPw", "owner123")
+        o.click("#lgPw")
+        o.keyboard.type("owner123")
+        assert o.input_value("#lgPw") == "owner123", "typing the owner password"
         o.click("#lgGo")
         o.wait_for_selector("text=Which counter is this?")
         o.click(".sheet .it[data-id='0']")

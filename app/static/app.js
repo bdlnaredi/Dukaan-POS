@@ -224,7 +224,7 @@ async function showLogin() {
         ${hello.cashiers.length ? "" : '<p class="small mute">No cashiers yet. Sign in as the owner to add them in Settings.</p>'}`;
       const go = () => login({ kind: "owner", password: $("#lgPw").value });
       $("#lgGo").onclick = go;
-      $("#lgPw").onkeydown = (e) => e.key === "Enter" && go();
+      $("#lgPw").onkeydown = (e) => { if (e.key === "Enter") go(); };
       $("#lgPw").focus();
     } else {
       el.innerHTML = `<div class="names">${hello.cashiers.map((n) => `<button class="btn" data-n="${E(n)}">${E(n)}</button>`).join("")}</div>`;
@@ -476,7 +476,7 @@ function qtySheet(it, line) {
     if (line) { line.qty = GST.qty(qm); saveCart(); renderCart(line.key); } else addItem(it, GST.qty(qm));
   };
   $("#qOk").onclick = ok;
-  $("#qq").onkeydown = $("#qa").onkeydown = (e) => e.key === "Enter" && ok();
+  $("#qq").onkeydown = $("#qa").onkeydown = (e) => { if (e.key === "Enter") ok(); };
   $("#qCancel").onclick = closeSheet;
   info();
   focusLater("#qq");
@@ -584,7 +584,7 @@ function lineSheet(l) {
     saveCart(); closeSheet(); renderCart(l.key);
   };
   $("#lOk").onclick = ok;
-  $$("input", s).forEach((i) => (i.onkeydown = (e) => e.key === "Enter" && ok()));
+  $$("input", s).forEach((i) => (i.onkeydown = (e) => { if (e.key === "Enter") ok(); }));
 }
 function billDiscount() {
   if (!S.cart.lines.length) return;
@@ -709,7 +709,7 @@ function paySheet() {
         $("#chg").style.background = t < total && $("#tend").value ? "var(--bad-soft)" : "";
       };
       $("#tend").oninput = upd;
-      $("#tend").onkeydown = (e) => e.key === "Enter" && done();
+      $("#tend").onkeydown = (e) => { if (e.key === "Enter") done(); };
       $$(".quick button", body).forEach((x) => (x.onclick = () => { $("#tend").value = (x.dataset.v / 100).toFixed(2); upd(); }));
       focusLater("#tend");
     } else if (mode === "upi") {

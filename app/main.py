@@ -27,7 +27,7 @@ import poster  # noqa: E402
 import reports  # noqa: E402
 import tally  # noqa: E402
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 PORT = int(os.environ.get("PORT", "2510"))
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 VPA = re.compile(r"^[A-Za-z0-9.\-_]{2,256}@[A-Za-z][A-Za-z0-9.\-]{1,63}$")
