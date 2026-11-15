@@ -1,0 +1,15 @@
+{
+  "name": "Dukaan billing",
+  "short_name": "Dukaan",
+  "description": "Counter billing with GST, sending bills to TallyPrime",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f3f4f1",
+  "theme_color": "#0d6b4b",
+  "icons": [
+    {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"},
+    {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}

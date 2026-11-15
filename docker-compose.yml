@@ -1,0 +1,14 @@
+services:
+  dukaan:
+    image: ghcr.io/bdlnaredi/dukaan:latest
+    container_name: dukaan
+    restart: unless-stopped
+    ports:
+      - "2510:2510"
+    environment:
+      APP_PASSWORD: "change-me"     # the owner's first password; change it later in Settings
+      TZ: "IST-5:30"
+    volumes:
+      - /mnt/user/appdata/dukaan:/data
+    security_opt:
+      - no-new-privileges:true

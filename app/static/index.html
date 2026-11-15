@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d6b4b">
+<title>Dukaan</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="stylesheet" href="/app.css?v=__VERSION__">
+<style id="pagestyle"></style>
+</head>
+<body>
+<header id="top" class="hide">
+  <button class="tb" id="menuBtn" aria-label="Menu"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+  <div class="grow" style="min-width:0">
+    <div class="brand" id="shopName">Dukaan</div>
+    <div class="sub ell" id="who"></div>
+  </div>
+  <nav id="nav"></nav>
+  <button class="tb" id="syncBtn" title="Connection"><span class="dot" id="dot"></span><span id="syncTxt" class="small"></span></button>
+</header>
+<div id="menu" class="hide"></div>
+<main id="app"></main>
+<div id="printarea"></div>
+<script src="/gst.js?v=__VERSION__"></script>
+<script src="/app.js?v=__VERSION__"></script>
+</body>
+</html>

@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>dukaan</Name>
+  <Repository>ghcr.io/bdlnaredi/dukaan:latest</Repository>
+  <Registry>https://github.com/bdlnaredi/Dukaan-POS/pkgs/container/dukaan</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/bdlnaredi/Dukaan-POS/issues</Support>
+  <Project>https://github.com/bdlnaredi/Dukaan-POS</Project>
+  <ReadMe>https://github.com/bdlnaredi/Dukaan-POS#readme</ReadMe>
+  <Overview>Dukaan is counter billing (POS) for a shop whose books are in TallyPrime. Bill on a phone, tablet or the counter PC with barcode scanning, print GST tax invoices on a thermal printer or send them on WhatsApp, and take cash, UPI (QR with the amount), card, split payments or credit. It keeps working offline. Every bill goes into Tally as a sales voucher with its number, items, HSN, CGST and SGST; returns go in as credit notes. GST rates and HSN codes come from Tally. Cashier PINs and permissions, one bill series per counter, and reports with GST by rate, the HSN summary and documents issued for GSTR-1. Dukaan never changes or deletes anything in Tally: it reads items and ledgers and only adds new vouchers.</Overview>
+  <Category>Productivity: Tools:</Category>
+  <ExtraSearchTerms>pos billing tally tallyprime gst invoice retail grocery kirana shop india barcode</ExtraSearchTerms>
+  <WebUI>http://[IP]:[PORT:2510]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/bdlnaredi/mediahub/main/unraid/dukaan.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/bdlnaredi/Dukaan-POS/main/app/static/icon-512.png</Icon>
+  <License>GPL-3.0</License>
+  <Requires>TallyPrime with its XML server on (F1 Help › Settings › Connectivity: acts as Both, port 9000) on a PC this server can reach. Setup guide: https://github.com/bdlnaredi/Dukaan-POS/blob/main/docs/INSTALL.md. For camera scanning and installing on phones, reach it over https (Cloudflare Tunnel or Tailscale).</Requires>
+  <Changes>
+### 0.1.0
+- First version: counter billing with GST, offline billing, thermal printing, WhatsApp, and bills into TallyPrime
+Full list: https://github.com/bdlnaredi/Dukaan-POS/blob/main/CHANGELOG.md
+  </Changes>
+  <Screenshot>https://raw.githubusercontent.com/bdlnaredi/Dukaan-POS/main/docs/images/billing.png</Screenshot>
+  <Screenshot>https://raw.githubusercontent.com/bdlnaredi/Dukaan-POS/main/docs/images/receipt.png</Screenshot>
+  <Screenshot>https://raw.githubusercontent.com/bdlnaredi/Dukaan-POS/main/docs/images/reports.png</Screenshot>
+  <Screenshot>https://raw.githubusercontent.com/bdlnaredi/Dukaan-POS/main/docs/images/tally.png</Screenshot>
+  <ExtraParams>--security-opt=no-new-privileges:true</ExtraParams>
+  <Config Name="Web UI port" Target="2510" Default="2510" Mode="tcp" Description="Port for the app" Type="Port" Display="always" Required="true" Mask="false">2510</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/dukaan" Mode="rw" Description="Bills, settings, items copied from Tally, and nightly backups" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/dukaan</Config>
+  <Config Name="Owner password" Target="APP_PASSWORD" Default="" Mode="" Description="The owner's first password (change it later in Settings). Cashiers get PINs inside the app." Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="Time zone" Target="TZ" Default="IST-5:30" Mode="" Description="Time zone for bill dates (IST-5:30 is India)" Type="Variable" Display="advanced" Required="false" Mask="false">IST-5:30</Config>
+</Container>
