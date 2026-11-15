@@ -205,6 +205,63 @@ try:
         o.wait_for_selector("#sName")
         o.screenshot(path=f"{SHOTS}/18-settings.png", full_page=True)
 
+        # labels: an item with an EAN barcode, and one that gets a shop barcode
+        o.goto(BASE + "/#labels")
+        o.wait_for_selector("#lQ")
+        o.click("#lQ"); o.keyboard.type("basmati")
+        o.click("#lRes .res")
+        assert o.input_value("#lCode") == ""
+        o.click("#lNew")
+        o.wait_for_function("document.querySelector('#lCode').value.startsWith('21')")
+        o.click("#lNet"); o.keyboard.type("1 kg")
+        o.fill("#lName", "Basmati Rice Premium")
+        o.click("#lPrice"); o.keyboard.press("Control+A"); o.keyboard.type("85")
+        o.fill("#lMrp", "99")
+        o.click("#lQuick button[data-m='6']")
+        o.fill("#lCopies", "3")
+        o.click("#lAdd")
+        o.click("#lQ"); o.keyboard.type("tata salt")
+        o.click("#lRes .res")
+        assert o.input_value("#lCode") == "8904043901015"
+        o.click("#lQuick button[data-m='12']")
+        o.click("#lAdd")
+        o.check("#oPack"); o.check("#oFssai")
+        o.screenshot(path=f"{SHOTS}/23-labels.png", full_page=True)
+        assert "Print 4 labels" in o.inner_text("#lPrint"), o.inner_text("#lPrint")
+        o.evaluate("window.print = () => {}")
+        o.click("#lPrint")
+        time.sleep(.3)
+        assert o.locator("#printarea .lbl").count() == 4
+        o.emulate_media(media="print")
+        o.screenshot(path=f"{SHOTS}/24-labels-print.png")
+        o.emulate_media(media="screen")
+        o.select_option("#lSize", "a4-65")
+        o.fill("#lSkip", "7"); o.dispatch_event("#lSkip", "change")
+        o.click("#lPrint")
+        time.sleep(.3)
+        o.emulate_media(media="print")
+        o.screenshot(path=f"{SHOTS}/25-labels-a4.png")
+        o.emulate_media(media="screen")
+        bills_now = call("/api/items", tok=tok)["items"]
+        assert any(c.startswith("21") for i in bills_now if i["name"] == "Basmati Rice Loose" for c in i["codes"])
+
+        # cancel a bill that is already in Tally
+        o.goto(BASE + "/#bills")
+        o.wait_for_selector("#bList .it[data-uid]")
+        o.locator("#bList .it[data-uid]", has_text="A/2627/2").first.click()
+        o.wait_for_selector("#dCancel")
+        o.click("#dCancel")
+        o.wait_for_selector("#cWhy")
+        o.fill("#cWhy", "billed twice")
+        o.screenshot(path=f"{SHOTS}/26-cancel.png")
+        o.click("#cYes")
+        for _ in range(60):
+            vs = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{TP}/").read())["vouchers"]
+            if any(v.get("cancelled") for v in vs):
+                break
+            time.sleep(.25)
+        assert any(v.get("cancelled") and v["number"] == "A/2627/2" for v in vs), [(v["number"], v.get("cancelled")) for v in vs]
+
         # phone size
         m = br.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
         mp = m.new_page()

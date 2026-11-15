@@ -88,7 +88,8 @@ def export(x):
         with lock:
             vs = [v for v in state["vouchers"] if v["tdate"] == d]
         return "<ENVELOPE><BODY><DATA><COLLECTION>" + "".join(
-            f"<VOUCHER><VOUCHERNUMBER>{e(v['number'])}</VOUCHERNUMBER><NARRATION>{e(v['narration'])}</NARRATION></VOUCHER>"
+            f"<VOUCHER VCHTYPE=\"{e(v['vtype'])}\"><VOUCHERNUMBER>{e(v['number'])}</VOUCHERNUMBER><VOUCHERTYPENAME>{e(v['vtype'])}</VOUCHERTYPENAME>"
+            f"<NARRATION>{e(v['narration'])}</NARRATION><ISCANCELLED>{'Yes' if v.get('cancelled') else 'No'}</ISCANCELLED></VOUCHER>"
             for v in vs) + "</COLLECTION></DATA></BODY></ENVELOPE>"
     return "<ENVELOPE><BODY><DATA></DATA></BODY></ENVELOPE>"
 
@@ -142,7 +143,7 @@ def check_voucher(v):
     if total != 0:
         return f"Voucher totals do not match! Dr/Cr differ by {total / 100:.2f}"
     num = v.findtext("VOUCHERNUMBER")
-    if num and any(x["number"] == num and x["vtype"] == vt for x in state["vouchers"]):
+    if num and any(x["number"] == num and x["vtype"] == vt and not x.get("cancelled") for x in state["vouchers"]):
         return f"Duplicate Voucher Number '{num}'"
     return ""
 
@@ -156,6 +157,15 @@ def import_(x):
             msg, state["fail_next"] = state["fail_next"], ""
             return f"<RESPONSE><CREATED>0</CREATED><ERRORS>1</ERRORS><LINEERROR>{msg}</LINEERROR></RESPONSE>", False
         created, errs = 0, []
+        if vs and vs[0].get("ACTION") == "Cancel":
+            v = vs[0]
+            hit = [x for x in state["vouchers"] if x["tdate"] == v.get("DATE") and x["vtype"] == v.get("VCHTYPE")
+                   and x["number"] == v.get("TAGVALUE") and not x.get("cancelled")]
+            if len(hit) != 1:
+                return "<RESPONSE><CREATED>0</CREATED><ERRORS>1</ERRORS><LINEERROR>Voucher not found</LINEERROR></RESPONSE>", False
+            hit[0]["cancelled"] = True
+            hit[0]["narration"] = v.findtext("NARRATION")
+            return "<RESPONSE><CREATED>0</CREATED><ALTERED>0</ALTERED><CANCELLED>1</CANCELLED><ERRORS>0</ERRORS></RESPONSE>", False
         for v in vs:
             err = check_voucher(v)
             if err:
@@ -164,7 +174,8 @@ def import_(x):
             d = v.findtext("DATE")
             from datetime import date
             td = date(int(d[:4]), int(d[4:6]), int(d[6:])).strftime("%-d-%b-%Y")
-            state["vouchers"].append({"vtype": v.get("VCHTYPE"), "number": v.findtext("VOUCHERNUMBER") or "",
+            auto = str(sum(1 for x in state["vouchers"] if x["vtype"] == v.get("VCHTYPE")) + 1)   # Tally's automatic numbering
+            state["vouchers"].append({"vtype": v.get("VCHTYPE"), "number": v.findtext("VOUCHERNUMBER") or auto,
                                       "narration": v.findtext("NARRATION") or "", "tdate": td, "xml": ET.tostring(v).decode()})
             created += 1
         drop = state["drop_after_create"] > 0 and created

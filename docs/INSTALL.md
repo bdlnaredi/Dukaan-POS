@@ -92,4 +92,6 @@ For the first week or two, bill in Dukaan alongside your current method. Each ev
 
 **Two devices on one counter?** Don't. Each counter's numbers are kept on its device. If you move a counter to another device, bills still waiting on the old one are marked for the owner.
 
-**Can I change a bill?** No. A bill in the customer's hand stays as it is. Before it reaches Tally the owner can cancel it; after that, take the goods back as a return (credit note) and bill again.
+**Can I change a bill?** No. A bill in the customer's hand stays as it is. The owner can **cancel** it (Bills › the bill › Cancel bill, with a reason) and bill again. If it's already in Tally it's cancelled there too, with Tally's own Cancel. That is allowed until GSTR-1 for its month is due (the 10th of the next month); after that, take the goods back as a return (credit note).
+
+**Labels.** Labels page (owner): pick an item, set MFD and EXP, check the price and MRP, and add it to the print list with the number of copies. Choose your label size and print. On a label printer, first set its paper size (in Windows' printer settings) to the label size, and set margins to None in the print window. Scan the first label before printing many.

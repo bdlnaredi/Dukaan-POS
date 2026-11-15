@@ -56,9 +56,34 @@ def check(xml):
     raise ValueError("Blocked: not a request Dukaan makes")
 
 
-def send(url, xml, timeout=120):
+_CANCEL = re.compile(
+    r'^<ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC>'
+    r'<REPORTNAME>Vouchers</REPORTNAME><STATICVARIABLES><SVCURRENTCOMPANY>[^<]*</SVCURRENTCOMPANY></STATICVARIABLES>'
+    r'</REQUESTDESC><REQUESTDATA><TALLYMESSAGE xmlns:UDF="TallyUDF">'
+    r'<VOUCHER DATE="\d{1,2}-[A-Za-z]{3}-\d{4}" TAGNAME="Voucher Number" TAGVALUE="[^"<>]+" VCHTYPE="[^"<>]+" ACTION="Cancel">'
+    r'<NARRATION>[^<]*\[dk:[A-Za-z0-9-]+\][^<]*</NARRATION></VOUCHER></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>$')
+
+
+def check_cancel(xml):
+    """The one change Dukaan may make in Tally: cancel (not delete) a single voucher it made itself."""
+    if not _CANCEL.match(xml):
+        raise ValueError("Blocked: not a plain cancel of one Dukaan voucher")
+
+
+def cancel_xml(company, day, vtype, number, narration):
+    return ("<ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC>"
+            f"<REPORTNAME>Vouchers</REPORTNAME><STATICVARIABLES><SVCURRENTCOMPANY>{esc(company)}</SVCURRENTCOMPANY></STATICVARIABLES>"
+            '</REQUESTDESC><REQUESTDATA><TALLYMESSAGE xmlns:UDF="TallyUDF">'
+            f'<VOUCHER DATE="{_tdate(day)}" TAGNAME="Voucher Number" TAGVALUE="{esc(number)}" VCHTYPE="{esc(vtype)}" ACTION="Cancel">'
+            f"<NARRATION>{esc(narration)}</NARRATION></VOUCHER></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>")
+
+
+def send(url, xml, timeout=120, cancel=False):
     """POST xml to Tally; the answer as text."""
-    check(xml)
+    if cancel:
+        check_cancel(xml)
+    else:
+        check(xml)
     body = xml.encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "text/xml;charset=utf-8"})
     with _lock:
@@ -136,15 +161,25 @@ def import_result(text):
     return (int(created.group(1)) if created else 0), errs
 
 
+def vouchers_tagged(url, company, day):
+    """{Dukaan tag: [{number, vtype, cancelled}]} for the vouchers on that day in Tally that carry a tag
+    ([dk:...] in the narration), plus "_numbers": how many vouchers have each (vtype, number)."""
+    root = read(url, vouchers_on(company, day, "VoucherNumber, VoucherTypeName, Narration, Date, IsCancelled"), timeout=180)
+    found, numbers = {}, {}
+    for v in root.iter("VOUCHER"):
+        num = tp.txt(v, "VOUCHERNUMBER")
+        vt = tp.txt(v, "VOUCHERTYPENAME") or v.get("VCHTYPE") or ""
+        numbers[(vt, num)] = numbers.get((vt, num), 0) + 1
+        for m in re.finditer(r"\[dk:([A-Za-z0-9-]+)\]", tp.txt(v, "NARRATION")):
+            found.setdefault(m.group(1), []).append({"number": num, "vtype": vt,
+                                                     "cancelled": tp.txt(v, "ISCANCELLED").lower() == "yes"})
+    found["_numbers"] = numbers
+    return found
+
+
 def tags_on(url, company, day):
     """The Dukaan tags ([dk:...]) in the narration of every voucher on that day in Tally."""
-    root = read(url, vouchers_on(company, day), timeout=180)
-    found = set()
-    for v in root.iter("VOUCHER"):
-        n = tp.txt(v, "NARRATION")
-        for m in re.finditer(r"\[dk:([A-Za-z0-9-]+)\]", n):
-            found.add(m.group(1))
-    return found
+    return {k for k in vouchers_tagged(url, company, day) if k != "_numbers"}
 
 
 def ping(url):

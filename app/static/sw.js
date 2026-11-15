@@ -1,7 +1,7 @@
 // Dukaan service worker: keeps the app itself on the device so billing works with no connection.
 // Bills and items are kept by the app (localStorage); this only caches the app's own files.
 const CACHE = "dukaan-__VERSION__";
-const SHELL = ["/", "/app.js?v=__VERSION__", "/gst.js?v=__VERSION__", "/app.css?v=__VERSION__", "/icon.svg", "/icon-192.png", "/manifest.webmanifest"];
+const SHELL = ["/", "/app.js?v=__VERSION__", "/gst.js?v=__VERSION__", "/barcode.js?v=__VERSION__", "/app.css?v=__VERSION__", "/icon.svg", "/icon-192.png", "/manifest.webmanifest"];
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
 });

@@ -303,21 +303,34 @@ def make_return(p, sess):
 
 # ---------------------------------------------------------------- cancelling and approving
 
+def gst_period_open(day):
+    """A bill can still be cancelled in Tally until GSTR-1 for its month is due (the 11th of the next month).
+    After that it is in the return, so the goods come back as a credit note instead."""
+    d, t = date.fromisoformat(day), date.today()
+    months = (t.year - d.year) * 12 + t.month - d.month
+    return months == 0 or (months == 1 and t.day <= 10)
+
+
 def cancel(uid, sess, reason):
     if sess.get("role") != "owner":
         raise PermissionError("Only the owner can cancel a bill.")
+    reason = _s(reason, 200)
+    if not reason:
+        raise ValueError("Say why the bill is being cancelled.")
     b = db.one("SELECT * FROM bill WHERE uid=?", (uid,))
     if not b or b["status"] != "ok":
         raise ValueError("That bill can't be cancelled.")
-    if db.one("SELECT 1 x FROM post WHERE bill_uid=? AND status IN ('done', 'sending', 'unknown')", (uid,)):
-        raise ValueError("This bill is already in Tally, so it can't be cancelled here. Take the items back as a return instead.")
     if db.one("SELECT 1 x FROM bill WHERE orig_uid=? AND status='ok'", (uid,)):
-        raise ValueError("Items on this bill were returned, so it can't be cancelled.")
+        raise ValueError("Items on this bill were returned. Cancel the return first, or take the rest back as a return.")
+    in_tally = bool(db.one("SELECT 1 x FROM post WHERE bill_uid=? AND status IN ('done', 'sending', 'unknown')", (uid,)))
+    if in_tally and not gst_period_open(b["date"]):
+        raise ValueError("GSTR-1 for this bill's month is already due, so it can't be cancelled now. Take the goods back as a return (credit note) instead.")
     with db.tx() as c:
-        c.execute("UPDATE bill SET status='cancelled', tally='skip', cancelled_by=?, cancel_reason=? WHERE uid=?",
-                  (sess.get("name"), _s(reason, 200), uid))
+        c.execute("UPDATE bill SET status='cancelled', tally=?, tally_error='', cancelled_by=?, cancel_reason=? WHERE uid=?",
+                  ("cancelling" if in_tally else "skip", sess.get("name"), reason, uid))
         c.execute("DELETE FROM post WHERE bill_uid=? AND status IN ('queued', 'failed')", (uid,))
-    db.log(sess.get("name"), f"Cancelled bill {b['number']}: {reason}")
+    db.log(sess.get("name"), f"Cancelled {b['number']}{' (and in Tally)' if in_tally else ''}: {reason}")
+    return {"in_tally": in_tally}
 
 
 def approve(uid, sess):

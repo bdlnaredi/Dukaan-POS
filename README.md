@@ -2,7 +2,7 @@
 
 Dukaan is a free, self-hosted billing app (POS) for a shop whose books are in TallyPrime. Bill on a phone, a tablet or the counter PC, print a GST tax invoice or send it on WhatsApp, take cash, UPI, card or credit (udhaar). Each bill then goes into Tally on its own as a sales voucher, with the same number, items, HSN, CGST and SGST.
 
-Dukaan never changes or deletes anything in Tally. It reads your items and ledgers and only ever **adds** new vouchers.
+Dukaan never deletes anything in Tally. It reads your items and ledgers and adds new vouchers. The only change it ever makes is when the owner cancels a bill: then it cancels that bill's own vouchers in Tally (Tally's Cancel, which keeps the voucher and its number).
 
 <table>
 <tr>
@@ -35,7 +35,8 @@ Dukaan never changes or deletes anything in Tally. It reads your items and ledge
 - **One number series per counter**, e.g. A/2627/1, B/2627/1, starting again each April.
 - **B2B bills:** the customer's GSTIN is checked. Bills of ₹50,000 or more to an unregistered buyer need their name and address (rule 46).
 - **Returns** become credit notes against the original bill, with the same GST.
-- **Cancelling:** a bill that hasn't reached Tally yet can be cancelled, and its number is reported as cancelled. Once it's in Tally, take the goods back as a return instead.
+- **Cancelling** (owner only, with a reason): a bill not yet in Tally is cancelled in Dukaan. A bill already in Tally is cancelled there too with Tally's own Cancel. The voucher and its number stay, marked cancelled, with amounts zero, and any contra or receipt made with it is cancelled as well. This is allowed until GSTR-1 for the bill's month is due (the 10th of the next month); after that, take the goods back as a return. Cancelled numbers are reported in GSTR-1's documents issued.
+- Dukaan only ever cancels vouchers it made itself (it finds them by a tag in their narration). It never deletes.
 - **Reports:** sales by payment mode, cash in the drawer, GST by rate, the **HSN summary** (GSTR-1 table 12, B2B and B2C apart) and **documents issued** (table 13). Both download as CSV.
 
 ### Into Tally
@@ -50,8 +51,15 @@ Stock goes out of the godown you choose. Every figure is worked out again on the
 
 **E-invoices:** counter sales to consumers (B2C) don't need one. For a bill to a business with a GSTIN, if your e-invoicing applies, generate the e-invoice in Tally after the bill arrives there.
 
+### Product labels
+- Labels with the **product name, net quantity, MFD, EXP, MRP, selling price, how much the customer saves, and a barcode**. Optionally "MRP incl. of all taxes", "Packed by" with the shop's name, and the shop's FSSAI number.
+- Pick an item and its price, MRP and barcode fill in. Set EXP with one tap (+1, 3, 6 or 9 months, +1 year).
+- An item with no barcode gets one with **Make one**: an EAN-13 starting 21 (the range for codes used inside a shop). It's saved on the item, so it scans at the counter straight away.
+- Label printer rolls (50×25, 38×25, 50×30, 50×38, 75×50, 100×50 mm) or A4 sheets (65, 40 or 24 labels), with "labels already used" for part-used sheets.
+
 ### For the owner
 - Cashiers sign in with a PIN. You choose who can give discounts, take returns or give credit.
+- Labels page for product labels (above).
 - Items page: selling price, MRP, barcodes (scan them in), loose, favourites. Kept in Dukaan; Tally's items aren't changed.
 - Tally page: the connection, where bills go, bills waiting or refused, with the reason.
 - Database backed up every night (45 days kept).

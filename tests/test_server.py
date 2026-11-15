@@ -141,7 +141,7 @@ try:
     vs = tally_state()["vouchers"]
     kinds = sorted((v["vtype"], v["number"]) for v in vs)
     print("in Tally:", kinds)
-    assert ("Counter Sales", f"A/{fy}/1") in kinds and ("Contra", "") in kinds and len(vs) == 4, kinds
+    assert ("Counter Sales", f"A/{fy}/1") in kinds and ("Contra", "1") in kinds and len(vs) == 4, kinds
     sale1 = next(v for v in vs if v["number"] == f"A/{fy}/1")
     assert "<PARTYLEDGERNAME>Cash</PARTYLEDGERNAME>" in sale1["xml"] and "Round Off" in sale1["xml"] or c1["round_off"] == 0
     sale2 = next(v for v in vs if v["number"] == f"A/{fy}/2")
@@ -201,9 +201,24 @@ try:
     cn = [v for v in tally_state()["vouchers"] if v["vtype"] == "Credit Note"][0]
     assert f"<REFERENCE>A/{fy}/1</REFERENCE>" in cn["xml"], cn["xml"][:500]
 
-    # cancel: not once in Tally
+    # cancel: a bill with a return can't be; a flagged one never sent is just cancelled here
     call(f"/api/bill/{b1['uid']}/cancel", {"reason": "x"}, tok, expect=400)
     call(f"/api/bill/{b6['uid']}/cancel", {"reason": "wrong total"}, tok)
+    call(f"/api/bill/{b2['uid']}/cancel", {"reason": "x"}, ctok, expect=403)
+    # a split bill already in Tally (sales + contra): both cancelled there, nothing deleted
+    before = len(tally_state()["vouchers"])
+    call(f"/api/bill/{b2['uid']}/cancel", {"reason": "customer changed mind"}, tok)
+    for _ in range(80):
+        b = call(f"/api/bill/{b2['uid']}", tok=tok)
+        if b["tally"] in ("cancelled", "cancel_failed"):
+            break
+        time.sleep(.25)
+    assert b["tally"] == "cancelled", b["tally_error"]
+    vs = tally_state()["vouchers"]
+    assert len(vs) == before
+    mine = [v for v in vs if b2["uid"] in v["narration"]]
+    assert len(mine) == 2 and all(v.get("cancelled") for v in mine), mine
+    assert all(not v.get("cancelled") for v in vs if b2["uid"] not in v["narration"])
 
     # reports
     s = call(f"/api/reports/summary?from={TODAY}&to={TODAY}", tok=tok)

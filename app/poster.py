@@ -127,6 +127,51 @@ def _send_bill(b, u):
     return True
 
 
+def _cancel_bill(b, u, company):
+    """Cancel, in Tally, the vouchers this bill made there (Tally's own Cancel: the voucher and its number stay,
+    the amounts become zero). Only vouchers carrying this bill's Dukaan tag. False when Tally can't be reached."""
+    posts = db.rows("SELECT * FROM post WHERE bill_uid=? AND status IN ('done', 'sending', 'unknown') ORDER BY seq DESC", (b["uid"],))
+    for p in posts:
+        try:
+            found = tally.vouchers_tagged(u, company, b["date"])
+        except (tally.Unreachable, tally.Unknown) as e:
+            state["error"] = str(e)
+            return False
+        hits = found.get(p["tag"], [])
+        if not hits or all(h["cancelled"] for h in hits):
+            with db.tx() as c:          # never reached Tally, or already cancelled there
+                c.execute("UPDATE post SET status='cancelled', done=? WHERE id=?", (time.time(), p["id"]))
+            continue
+        h = next(h for h in hits if not h["cancelled"])
+        if len(hits) > 1 or not h["number"] or found["_numbers"].get((h["vtype"], h["number"]), 0) != 1:
+            msg = (f"{p['label']}: Tally has more than one voucher numbered '{h['number'] or '(none)'}' in {h['vtype']} that day, "
+                   "so Dukaan can't safely pick one. Cancel it in Tally by hand.")
+            with db.tx() as c:
+                c.execute("UPDATE bill SET tally='cancel_failed', tally_error=? WHERE uid=?", (msg, b["uid"]))
+            return True
+        nar = f"Cancelled in Dukaan by {b['cancelled_by'] or 'owner'}: {b['cancel_reason'] or ''} [dk:{p['tag']}]"
+        xml = tally.cancel_xml(company, b["date"], h["vtype"], h["number"], nar)
+        try:
+            text = tally.send(u, xml, timeout=120, cancel=True)
+            again = tally.vouchers_tagged(u, company, b["date"]).get(p["tag"], [])
+        except (tally.Unreachable, tally.Unknown) as e:
+            state["error"] = str(e)
+            return False
+        if again and all(x["cancelled"] for x in again):
+            with db.tx() as c:
+                c.execute("UPDATE post SET status='cancelled', done=? WHERE id=?", (time.time(), p["id"]))
+        else:
+            _, errs = tally.import_result(text)
+            msg = f"{p['label']}: Tally didn't cancel it. " + ("; ".join(errs) or text.strip()[:200])
+            with db.tx() as c:
+                c.execute("UPDATE bill SET tally='cancel_failed', tally_error=? WHERE uid=?", (msg[:600], b["uid"]))
+            return True
+    with db.tx() as c:
+        c.execute("UPDATE bill SET tally='cancelled', tally_error='' WHERE uid=?", (b["uid"],))
+    db.log("Dukaan", f"Bill {b['number']} cancelled in Tally")
+    return True
+
+
 def post_waiting():
     u = url()
     setup = db.get("tally_setup", {}) or {}
@@ -144,6 +189,14 @@ def post_waiting():
     shop = settings().get("shop") or {}
     info = {**info, "state": shop.get("state") or info.get("state", "")}
     with _run_lock:
+        for b in db.rows("SELECT * FROM bill WHERE tally='cancelling' ORDER BY created LIMIT 20"):
+            state["busy"] = f"Cancelling {b['number']} in Tally"
+            try:
+                if not _cancel_bill(b, u, setup["company"]):
+                    state["tally"] = "can't reach Tally"
+                    return
+            finally:
+                state["busy"] = ""
         bills = db.rows("""SELECT * FROM bill WHERE tally IN ('pending', 'sending') AND status='ok' AND flag=''
             AND calc IS NOT NULL ORDER BY created LIMIT 40""")
         for b in bills:
@@ -173,6 +226,8 @@ def retry(uid=None):
         c.execute(q, (uid,) if uid else ())
         q2 = "UPDATE post SET status='queued', error='' WHERE status='failed'" + (" AND bill_uid=?" if uid else "")
         c.execute(q2, (uid,) if uid else ())
+        q3 = "UPDATE bill SET tally='cancelling', tally_error='' WHERE tally='cancel_failed'" + (" AND uid=?" if uid else "")
+        c.execute(q3, (uid,) if uid else ())
     wake()
 
 

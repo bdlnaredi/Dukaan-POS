@@ -172,20 +172,20 @@ function afterBoot() {
 }
 function buildNav() {
   const v = [["bill", "Billing"], ["bills", "Bills"]];
-  if (isOwner()) v.push(["reports", "Reports"], ["items", "Items"], ["tally", "Tally"], ["settings", "Settings"]);
+  if (isOwner()) v.push(["reports", "Reports"], ["items", "Items"], ["labels", "Labels"], ["tally", "Tally"], ["settings", "Settings"]);
   $("#nav").innerHTML = v.map(([k, l]) => `<a href="#${k}" data-v="${k}">${l}</a>`).join("");
   S.navItems = v;
 }
 function route() {
   if (!S.boot) return;
   let v = (location.hash || "#bill").slice(1);
-  if (!["bill", "bills", "reports", "items", "tally", "settings"].includes(v)) v = "bill";
+  if (!["bill", "bills", "reports", "items", "labels", "tally", "settings"].includes(v)) v = "bill";
   if (!isOwner() && !["bill", "bills"].includes(v)) v = "bill";
   S.view = v;
   $$("#nav a").forEach((a) => a.classList.toggle("on", a.dataset.v === v));
   closeMenu();
   closeSheet();
-  ({ bill: viewBill, bills: viewBills, reports: viewReports, items: viewItems, tally: viewTally, settings: viewSettings })[v]();
+  ({ bill: viewBill, bills: viewBills, reports: viewReports, items: viewItems, labels: viewLabels, tally: viewTally, settings: viewSettings })[v]();
 }
 function toggleMenu() {
   const m = $("#menu");
@@ -1091,7 +1091,7 @@ function viewBills() {
     const html = [
       ...waiting.map((b) => `<div class="it" data-local="${b.uid}"><div class="grow"><b>${E(b.number)}</b> <span class="chip ${b._error ? "bad" : "warn"}">${b._error ? "Not accepted" : "Not sent yet"}</span><div class="small mute">${E(b.time)} · ${E((b.buyer || {}).name || (b.buyer || {}).ledger || "Walk-in")}</div></div><b class="num">${rs(b.amount)}</b></div>`),
       ...rows.map((b) => `<div class="it" data-uid="${b.uid}"><div class="grow"><b>${E(b.number)}</b> ${b.kind === "return" ? '<span class="chip acc">Return</span>' : ""}
-        ${b.status === "cancelled" ? '<span class="chip bad">Cancelled</span>' : b.flag ? '<span class="chip bad">Marked</span>' : b.tally === "posted" ? '<span class="chip ok">In Tally</span>' : b.tally === "failed" ? '<span class="chip bad">Tally refused</span>' : '<span class="chip">Not in Tally yet</span>'}
+        ${b.status === "cancelled" ? '<span class="chip bad">Cancelled</span>' + (b.tally === "cancel_failed" ? ' <span class="chip bad">Not cancelled in Tally</span>' : b.tally === "cancelling" ? ' <span class="chip warn">Cancelling in Tally</span>' : "") : b.flag ? '<span class="chip bad">Marked</span>' : b.tally === "posted" ? '<span class="chip ok">In Tally</span>' : b.tally === "failed" ? '<span class="chip bad">Tally refused</span>' : '<span class="chip">Not in Tally yet</span>'}
         <div class="small mute">${E(b.time.slice(0, 5))} · ${E(b.customer || "Walk-in")} · ${b.modes.map((m) => MODE[m] || m).join(" + ") || "Credit"} · ${E(b.cashier || "")}</div></div>
         <b class="num" style="${b.kind === "return" ? "color:var(--bad)" : ""}">${b.kind === "return" ? "−" : ""}${rs(b.amount)}</b></div>`),
       ...local.map((r) => `<div class="it" data-recent="${r.uid}"><div class="grow"><b>${E(r.number)}</b> <span class="chip">on this device</span></div><b class="num">${rs(r.calc.amount)}</b></div>`),
@@ -1111,11 +1111,13 @@ async function billDetail(uid, reload) {
   const c = b.calc || { lines: [], taxes: [] };
   const d = b.data;
   const rec = toRec(b);
-  const chips = b.status === "cancelled" ? '<span class="chip bad">Cancelled</span>' : (b.flag ? '<span class="chip bad">Marked for owner</span> ' : "") +
+  const TC = { cancelling: '<span class="chip warn">Being cancelled in Tally</span>', cancelled: '<span class="chip">Cancelled in Tally too</span>',
+    cancel_failed: '<span class="chip bad">Couldn\'t cancel in Tally</span>' };
+  const chips = b.status === "cancelled" ? '<span class="chip bad">Cancelled</span> ' + (TC[b.tally] || "") : (b.flag ? '<span class="chip bad">Marked for owner</span> ' : "") +
     (b.tally === "posted" ? '<span class="chip ok">In Tally</span>' : b.tally === "failed" ? '<span class="chip bad">Tally refused it</span>' : '<span class="chip">Not in Tally yet</span>');
   const s = sheet(`${b.kind === "return" ? "Return" : "Bill"} ${E(b.number)}`, `
     <div class="row wrap">${chips}<span class="grow"></span><span class="small mute">${E(niceDate(b.date))} ${E(b.time)} · ${E(d.counter)} · ${E(b.cashier || "")}</span></div>
-    ${b.flag ? `<div class="note bad">${E(b.flag)}</div>` : ""}${b.tally_error ? `<div class="note bad">Tally: ${E(b.tally_error)}</div>` : ""}
+    ${b.status === "cancelled" ? `<div class="note">Cancelled by ${E(b.cancelled_by || "")}: ${E(b.cancel_reason || "")}</div>` : ""}${b.flag ? `<div class="note bad">${E(b.flag)}</div>` : ""}${b.tally_error ? `<div class="note bad">Tally: ${E(b.tally_error)}</div>` : ""}
     ${b.kind === "return" ? `<div class="note">Against bill <b>${E(d.orig_number)}</b> (${E(niceDate(d.orig_date))}). Refund: ${E(MODE[d.refund])}${d.reason ? ". " + E(d.reason) : ""}</div>` : ""}
     ${d.buyer.ledger || d.buyer.name ? `<p><b>${E(d.buyer.ledger || d.buyer.name)}</b> ${E(d.buyer.phone || "")} ${d.buyer.gstin ? "· GSTIN " + E(d.buyer.gstin) : ""}</p>` : ""}
     <div class="tw"><table class="t"><tr><th>Item</th><th class="r">Qty</th><th class="r">GST</th><th class="r">Taxable</th><th class="r">Amount</th></tr>
@@ -1127,15 +1129,28 @@ async function billDetail(uid, reload) {
   `<button class="btn" id="dPrint">Print / WhatsApp</button>
    ${b.kind === "sale" && b.status === "ok" && me().can_return && (b.returnable || []).some((x) => x > 0) ? '<button class="btn" id="dRet">Return items</button>' : ""}
    ${isOwner() && b.flag && b.status === "ok" ? '<button class="btn acc" id="dOk">Looks right, send</button>' : ""}
-   ${isOwner() && b.tally === "failed" ? '<button class="btn" id="dRetry">Try Tally again</button>' : ""}
-   ${isOwner() && b.status === "ok" && b.tally !== "posted" && !(b.posts || []).some((p) => p.status === "done") ? '<button class="btn bad" id="dCancel">Cancel bill</button>' : ""}`, { wide: true });
+   ${isOwner() && (b.tally === "failed" || b.tally === "cancel_failed") ? '<button class="btn" id="dRetry">Try Tally again</button>' : ""}
+   ${isOwner() && b.status === "ok" && !(b.returns || []).some((r) => r.status === "ok") ? '<button class="btn bad" id="dCancel">Cancel bill</button>' : ""}`, { wide: true });
   $("#dPrint").onclick = () => receiptSheet(rec);
   const act = async (path, body, msg) => { try { await api(path, body); toast(msg); closeSheet(); reload && reload(); } catch (e) { toast(e.message, true); } };
   $("#dOk") && ($("#dOk").onclick = () => act(`/api/bill/${uid}/approve`, {}, "It will go to Tally."));
   $("#dRetry") && ($("#dRetry").onclick = () => act(`/api/bill/${uid}/retry`, {}, "Trying again."));
   $("#dCancel") && ($("#dCancel").onclick = () => {
-    const why = prompt("Why is this bill being cancelled? (kept in the record)");
-    if (why) act(`/api/bill/${uid}/cancel`, { reason: why }, "Bill cancelled. Its number is reported as cancelled.");
+    const inTally = (b.posts || []).some((p) => p.status === "done" || p.status === "sending" || p.status === "unknown");
+    sheet(`Cancel ${E(b.number)}?`, `${inTally
+      ? `<div class="note">This bill is already in Tally. Dukaan will <b>cancel</b> it there too, using Tally's own Cancel: the voucher and its number stay in Tally, marked cancelled, with the amounts made zero. Nothing is deleted.${(b.posts || []).length > 1 ? " The contra or receipt made with it is cancelled too." : ""}</div>
+         <p class="small mute">This is only allowed until GSTR-1 for the bill's month is due (the 10th of next month). After that, take the goods back as a return.</p>`
+      : `<div class="note">This bill hasn't gone to Tally, so it is cancelled only in Dukaan.</div>`}
+      <p class="small mute">The bill number stays used and is reported as cancelled in GSTR-1 (documents issued).</p>
+      <label class="f"><span>Why is it being cancelled?</span><input class="in" id="cWhy" placeholder="e.g. wrong items billed"></label>`,
+    `<button class="btn" id="cNo">Keep the bill</button><button class="btn bad" id="cYes">Cancel the bill</button>`);
+    $("#cNo").onclick = closeSheet;
+    $("#cYes").onclick = () => {
+      const why = $("#cWhy").value.trim();
+      if (!why) return toast("Say why the bill is being cancelled.", true);
+      act(`/api/bill/${uid}/cancel`, { reason: why }, inTally ? "Cancelled. Cancelling it in Tally now." : "Bill cancelled.");
+    };
+    focusLater("#cWhy");
   });
   $("#dRet") && ($("#dRet").onclick = () => returnSheet(b, reload));
   void s;
@@ -1348,7 +1363,7 @@ async function viewTally() {
           <td>${r ? `<select class="in" data-cg="${k}">${opt(ch.cgst, (s.cgst || {})[k])}</select>` : "-"}</td><td>${r ? `<select class="in" data-sg="${k}">${opt(ch.sgst, (s.sgst || {})[k])}</select>` : "-"}</td></tr>`; }).join("") || '<tr><td colspan="4" class="mute">Copy items from Tally first.</td></tr>'}</table></div>
         <label class="chk"><input type="checkbox" id="sConf" ${s.confirmed ? "checked" : ""}> I've checked these. Send bills to Tally.</label>
         <button class="btn pri block" id="sSave">Save</button>
-        <p class="small mute">Dukaan only ever adds new vouchers to Tally. It never changes or deletes anything already there.</p>
+        <p class="small mute">Dukaan adds new vouchers to Tally and never deletes anything. The only change it makes is cancelling (with Tally’s Cancel) the vouchers of a bill you cancel.</p>
       </div>
     </div>`;
   $("#tCon").onclick = async () => {
@@ -1444,6 +1459,188 @@ async function viewSettings() {
   $("#uAdd").onclick = () => userSheet();
   $$("[data-u]").forEach((el) => (el.onclick = () => userSheet(d.cashiers.find((c) => c.id === Number(el.dataset.u)))));
   $("#pwGo").onclick = async () => { try { await api("/api/password", { old: $("#pwO").value, new: $("#pwN").value }); toast("Password changed."); $("#pwO").value = $("#pwN").value = ""; } catch (e) { toast(e.message, true); } };
+}
+
+// ---------------------------------------------------------------- labels (owner)
+const LABEL_SIZES = {
+  "50x25": { name: "50 × 25 mm roll", w: 50, h: 25 },
+  "38x25": { name: "38 × 25 mm roll", w: 38, h: 25 },
+  "50x30": { name: "50 × 30 mm roll", w: 50, h: 30 },
+  "50x38": { name: "50 × 38 mm roll", w: 50, h: 38 },
+  "75x50": { name: "75 × 50 mm roll", w: 75, h: 50 },
+  "100x50": { name: "100 × 50 mm roll", w: 100, h: 50 },
+  "a4-65": { name: "A4 sheet, 65 labels (38.1 × 21.2 mm)", w: 38.1, h: 21.2, cols: 5, rows: 13, top: 10.7, left: 4.75, gx: 2.5, gy: 0 },
+  "a4-40": { name: "A4 sheet, 40 labels (52.5 × 29.7 mm)", w: 52.5, h: 29.7, cols: 4, rows: 10, top: 0, left: 0, gx: 0, gy: 0 },
+  "a4-24": { name: "A4 sheet, 24 labels (70 × 37 mm)", w: 70, h: 37, cols: 3, rows: 8, top: 0.5, left: 0, gx: 0, gy: 0 },
+};
+function lblState() {
+  const d = { size: "50x25", opts: { taxes: true, packed: false, fssai: false }, list: [], skip: 0 };
+  const st = LS.get("dk_labels", d);
+  return { ...d, ...st, opts: { ...d.opts, ...(st.opts || {}) } };
+}
+function ddmmyy(iso) { if (!iso) return ""; const [y, m, d] = iso.split("-"); return `${d}/${m}/${y}`; }
+function addMonths(iso, n) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const t = new Date(y, m - 1 + n, d);
+  if (t.getDate() !== d) t.setDate(0);          // 31 Jan + 1 month -> 28/29 Feb
+  return todayISO(t);
+}
+function labelHTML(L, size, opts) {
+  const sz = LABEL_SIZES[size];
+  const f = Math.min(sz.w / 17, sz.h / 8.2);       // base font size in mm
+  const sh = shopInfo();
+  const save = L.mrp && L.price < L.mrp ? L.mrp - L.price : 0;
+  const pct = save ? Math.round((save * 100) / L.mrp) : 0;
+  let bc = "";
+  if (L.code) { try { bc = Barcode.svg(L.code, { height: 40, text: false }); } catch (e) { bc = `<div style="color:red">${E(e.message)}</div>`; } }
+  const foot = [opts.packed && sh.name ? `Packed by ${sh.name}` : "", opts.fssai && sh.fssai ? `FSSAI ${sh.fssai}` : ""].filter(Boolean).join(" · ");
+  return `<div class="lbl" style="width:${sz.w}mm;height:${sz.h}mm;font-size:${f.toFixed(2)}mm">
+    <div class="l-nm">${E(L.name)}${L.net ? ` <span class="l-net">${E(L.net)}</span>` : ""}</div>
+    <div class="l-dt">${L.mfd ? `MFD: <b>${ddmmyy(L.mfd)}</b>` : ""}${L.exp ? ` &nbsp;EXP: <b>${ddmmyy(L.exp)}</b>` : ""}</div>
+    <div class="l-pr">${save ? `<span class="l-mrp">MRP ₹${GST.rs(L.mrp)}</span><span class="l-our">₹${GST.rs(L.price)}</span><span class="l-save">Save ₹${GST.rs(save)}${pct ? ` (${pct}%)` : ""}</span>`
+      : `<span class="l-our">${L.mrp ? "MRP " : ""}₹${GST.rs(L.price)}</span>`}</div>
+    ${opts.taxes && L.mrp ? '<div class="l-tx">MRP incl. of all taxes</div>' : ""}
+    ${bc ? `<div class="l-bc">${bc}</div><div class="l-code">${E(L.code)}</div>` : '<div class="l-bc"></div>'}
+    ${foot ? `<div class="l-ft">${E(foot)}</div>` : ""}</div>`;
+}
+function viewLabels() {
+  const st = lblState();
+  const save = () => LS.set("dk_labels", st);
+  let cur = { name: "", net: "", mfd: todayISO(), exp: "", mrp: 0, price: 0, code: "", copies: 1, item: "" };
+  $("#app").innerHTML = `<div class="cols">
+    <div class="card"><h2>Make a label</h2>
+      <div class="search" style="position:relative"><span class="ic">${ICON.search}</span><input class="in" id="lQ" placeholder="Pick an item (or just type the label below)" autocomplete="off" style="padding-left:44px"></div>
+      <div id="lRes" class="card hide" style="padding:0;position:absolute;z-index:5;max-height:300px;overflow:auto;width:min(560px,90vw)"></div>
+      <label class="f"><span>Product name on the label</span><input class="in" id="lName"></label>
+      <div class="grid2"><label class="f"><span>Net quantity (optional)</span><input class="in" id="lNet" placeholder="e.g. 1 kg, 500 g"></label>
+        <label class="f"><span>Copies</span><input class="in" id="lCopies" inputmode="numeric" value="1"></label>
+        <label class="f"><span>MFD (packed on)</span><input class="in" type="date" id="lMfd"></label>
+        <label class="f"><span>EXP (use by)</span><input class="in" type="date" id="lExp"></label></div>
+      <div class="quick" id="lQuick">${[["1 month", 1], ["3 months", 3], ["6 months", 6], ["9 months", 9], ["1 year", 12]].map(([t, n]) => `<button class="btn sm" data-m="${n}">+${t}</button>`).join("")}</div>
+      <div class="grid2"><label class="f"><span>MRP (₹)</span><input class="in" id="lMrp" inputmode="decimal"></label>
+        <label class="f"><span>Selling price (₹)</span><input class="in" id="lPrice" inputmode="decimal"></label></div>
+      <div id="lSave" class="small" style="margin-top:6px"></div>
+      <label class="f"><span>Barcode</span><div class="row"><input class="in grow" id="lCode" placeholder="from the item, or scan/type one"><button class="btn" id="lCam" title="Scan">${ICON.scan}</button><button class="btn" id="lNew">Make one</button></div></label>
+      <div class="small mute" id="lCodeInfo" style="margin-top:4px"></div>
+      <button class="btn pri block" style="margin-top:14px" id="lAdd">Add to print list</button>
+    </div>
+    <div>
+      <div class="card"><div class="row"><h2 class="grow" style="margin:0">Preview</h2><span class="small mute" id="lSzTxt"></span></div>
+        <div style="display:flex;justify-content:center;padding:14px;background:#e9ece8;border-radius:10px;margin-top:10px;overflow:auto"><div id="lPrev" style="zoom:2"></div></div></div>
+      <div class="card" style="margin-top:12px"><h2>Print list</h2>
+        <label class="f"><span>Label size</span><select class="in" id="lSize">${Object.entries(LABEL_SIZES).map(([k, v]) => `<option value="${k}" ${k === st.size ? "selected" : ""}>${v.name}</option>`).join("")}</select></label>
+        <label class="f" id="lSkipRow"><span>Labels already used on the first sheet</span><input class="in" id="lSkip" inputmode="numeric" value="${st.skip || 0}"></label>
+        <label class="chk"><input type="checkbox" id="oTax" ${st.opts.taxes ? "checked" : ""}> "MRP incl. of all taxes"</label>
+        <label class="chk"><input type="checkbox" id="oPack" ${st.opts.packed ? "checked" : ""}> "Packed by" with the shop's name</label>
+        <label class="chk"><input type="checkbox" id="oFssai" ${st.opts.fssai ? "checked" : ""}> Shop's FSSAI number</label>
+        <div id="lList" class="list"></div>
+        <div class="row" style="margin-top:10px"><button class="btn bad" id="lClear">Clear list</button><span class="grow"></span><button class="btn pri big" id="lPrint">Print labels</button></div>
+        <p class="small mute">On a label printer, set the paper size in the printer's settings to the label size, and margins to None in the print window. Check that the first label scans before printing many.</p>
+      </div>
+    </div></div>`;
+  $("#lMfd").value = cur.mfd;
+  const read = () => {
+    cur.name = $("#lName").value.trim(); cur.net = $("#lNet").value.trim();
+    cur.mfd = $("#lMfd").value; cur.exp = $("#lExp").value;
+    cur.mrp = $("#lMrp").value.trim() ? GST.paise($("#lMrp").value) : 0;
+    cur.price = GST.paise($("#lPrice").value);
+    cur.code = $("#lCode").value.trim(); cur.copies = Math.max(1, Math.min(500, parseInt($("#lCopies").value, 10) || 1));
+  };
+  const draw = () => {
+    read();
+    const sz = LABEL_SIZES[st.size];
+    $("#lSzTxt").textContent = `${sz.w} × ${sz.h} mm, shown twice the size`;
+    $("#lSkipRow").classList.toggle("hide", !sz.cols);
+    const save = cur.mrp && cur.price < cur.mrp ? cur.mrp - cur.price : 0;
+    $("#lSave").innerHTML = isNaN(cur.price) || isNaN(cur.mrp) ? '<span style="color:var(--bad)">Check the prices.</span>'
+      : cur.mrp && cur.price > cur.mrp ? '<span style="color:var(--bad)">Selling price can\'t be above the MRP.</span>'
+      : save ? `<span style="color:var(--ok)">Customer saves ${rs(save)} (${Math.round((save * 100) / cur.mrp)}%)</span>` : "";
+    let info = "";
+    if (cur.code) { try { Barcode.svg(cur.code); info = Barcode.isEan13(cur.code) ? "EAN-13 barcode" : "Code 128 barcode"; } catch (e) { info = `<span style="color:var(--bad)">${E(e.message)}</span>`; } }
+    const it = S.byName[cur.item];
+    if (cur.code && it && !it.codes.includes(cur.code)) info += " · not on the item yet: billing won't find it by this barcode";
+    $("#lCodeInfo").innerHTML = info;
+    $("#lPrev").innerHTML = labelHTML({ ...cur, name: cur.name || "Product name", price: isNaN(cur.price) ? 0 : cur.price }, st.size, st.opts);
+    $("#lNew").disabled = !cur.item || !!(it && it.codes.length);
+  };
+  const pick = (it) => {
+    cur.item = it.name;
+    $("#lNet").value = ""; $("#lCopies").value = "1";
+    $("#lName").value = it.name;
+    $("#lMrp").value = it.mrp ? (it.mrp / 100).toFixed(2) : "";
+    $("#lPrice").value = it.price ? (it.price / 100).toFixed(2) : "";
+    $("#lCode").value = (it.codes || []).find((c) => Barcode.isEan13(c)) || (it.codes || [])[0] || "";
+    $("#lQ").value = ""; $("#lRes").classList.add("hide");
+    draw();
+  };
+  $("#lQ").oninput = () => {
+    const r = searchItems($("#lQ").value).slice(0, 20);
+    const box = $("#lRes");
+    box.classList.toggle("hide", !r.length);
+    box.innerHTML = r.map((i, k) => `<div class="res" data-k="${k}"><div class="grow"><div class="nm">${E(i.name)}</div><div class="small mute">${i.mrp ? "MRP " + rs(i.mrp) + " · " : ""}${i.codes.length ? i.codes[0] : "no barcode"}</div></div><b>${rs(i.price)}</b></div>`).join("");
+    $$(".res", box).forEach((el) => (el.onclick = () => pick(r[el.dataset.k])));
+  };
+  $$("#app input").forEach((i) => i.addEventListener("input", draw));
+  $$("#lQuick button").forEach((b) => (b.onclick = () => { $("#lExp").value = addMonths($("#lMfd").value || todayISO(), Number(b.dataset.m)); draw(); }));
+  $("#lCam").onclick = () => camera((c) => { $("#lCode").value = c; draw(); });
+  $("#lNew").onclick = async () => {
+    try {
+      const r = await api("/api/item/newcode", { name: cur.item });
+      $("#lCode").value = r.code;
+      const it = S.byName[cur.item];
+      if (it) { it.codes = r.item.codes; S.byCode[r.code.toLowerCase()] = it; }
+      toast(`Barcode ${r.code} given to ${cur.item}. Counters scan it after they reload items.`);
+      draw();
+    } catch (e) { toast(e.message, true); }
+  };
+  const drawList = () => {
+    $("#lList").innerHTML = st.list.map((L, k) => `<div class="it"><div class="grow"><b>${E(L.name)}</b> ${L.net ? E(L.net) : ""}<div class="small mute">${L.mrp ? "MRP " + rs(L.mrp) + " · " : ""}${rs(L.price)} · ${L.mfd ? "MFD " + ddmmyy(L.mfd) : ""} ${L.exp ? "EXP " + ddmmyy(L.exp) : ""} · ${E(L.code || "no barcode")}</div></div>
+      <input class="in" style="width:70px;text-align:center" data-c="${k}" value="${L.copies}" inputmode="numeric"><button class="btn sm ghost" data-x="${k}">✕</button></div>`).join("")
+      || '<div class="empty">Nothing yet. Make a label and add it.</div>';
+    $$("[data-x]").forEach((b) => (b.onclick = () => { st.list.splice(Number(b.dataset.x), 1); save(); drawList(); }));
+    $$("[data-c]").forEach((i) => (i.onchange = () => { st.list[Number(i.dataset.c)].copies = Math.max(1, Math.min(500, parseInt(i.value, 10) || 1)); save(); drawList(); }));
+    const n = st.list.reduce((a, L) => a + L.copies, 0);
+    $("#lPrint").textContent = n ? `Print ${n} label${n > 1 ? "s" : ""}` : "Print labels";
+    $("#lPrint").disabled = !n;
+  };
+  $("#lAdd").onclick = () => {
+    read();
+    if (!cur.name) return toast("Enter the product name.", true);
+    if (!(cur.price > 0)) return toast("Enter the selling price.", true);
+    if (isNaN(cur.mrp)) return toast("The MRP isn't a number.", true);
+    if (cur.mrp && cur.price > cur.mrp) return toast("Selling price can't be above the MRP.", true);
+    if (cur.exp && cur.mfd && cur.exp < cur.mfd) return toast("EXP is before MFD.", true);
+    if (cur.code) { try { Barcode.svg(cur.code); } catch (e) { return toast(e.message, true); } }
+    st.list.push({ ...cur });
+    save(); drawList();
+    toast(`Added ${cur.copies} × ${cur.name}`);
+  };
+  $("#lClear").onclick = () => { if (confirm("Clear the print list?")) { st.list = []; save(); drawList(); } };
+  $("#lSize").onchange = () => { st.size = $("#lSize").value; save(); draw(); };
+  $("#lSkip").onchange = () => { st.skip = Math.max(0, parseInt($("#lSkip").value, 10) || 0); save(); };
+  const opt = () => { st.opts = { taxes: $("#oTax").checked, packed: $("#oPack").checked, fssai: $("#oFssai").checked }; save(); draw(); };
+  $("#oTax").onchange = $("#oPack").onchange = $("#oFssai").onchange = opt;
+  $("#lPrint").onclick = () => printLabels(st);
+  draw(); drawList();
+}
+function printLabels(st) {
+  const sz = LABEL_SIZES[st.size];
+  const all = [];
+  for (const L of st.list) for (let i = 0; i < L.copies; i++) all.push(labelHTML(L, st.size, st.opts));
+  let html = "", css;
+  if (!sz.cols) {
+    css = `@page{size:${sz.w}mm ${sz.h}mm;margin:0} #printarea .lbl{break-after:page;page-break-after:always}`;
+    html = all.join("");
+  } else {
+    const per = sz.cols * sz.rows;
+    const cells = Array(Math.min(st.skip || 0, per - 1)).fill('<div class="lbl" style="visibility:hidden"></div>').concat(all);
+    css = `@page{size:A4;margin:0} #printarea .lsheet{width:210mm;height:297mm;box-sizing:border-box;padding:${sz.top}mm 0 0 ${sz.left}mm;display:grid;
+      grid-template-columns:repeat(${sz.cols},${sz.w}mm);grid-auto-rows:${sz.h}mm;column-gap:${sz.gx}mm;row-gap:${sz.gy}mm;break-after:page;page-break-after:always;overflow:hidden}`;
+    for (let i = 0; i < cells.length; i += per) html += `<div class="lsheet">${cells.slice(i, i + per).join("")}</div>`;
+  }
+  $("#pagestyle").textContent = "@media print{" + css + "}";
+  $("#printarea").innerHTML = html;
+  setTimeout(() => window.print(), 80);
 }
 
 start();

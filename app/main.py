@@ -27,7 +27,7 @@ import poster  # noqa: E402
 import reports  # noqa: E402
 import tally  # noqa: E402
 
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 PORT = int(os.environ.get("PORT", "2510"))
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 VPA = re.compile(r"^[A-Za-z0-9.\-_]{2,256}@[A-Za-z][A-Za-z0-9.\-]{1,63}$")
@@ -138,6 +138,7 @@ def api(method, path, q, body, sess, ip):
             try:
                 if act == "cancel":
                     billing.cancel(uid, sess, body.get("reason", ""))
+                    poster.wake()
                 elif act == "approve":
                     billing.approve(uid, sess)
                     poster.wake()
@@ -187,6 +188,8 @@ def api(method, path, q, body, sess, ip):
         return {"items": billing.items(include_hidden=True)}
     if path == "/api/item" and method == "POST":
         return save_item(body)
+    if path == "/api/item/newcode" and method == "POST":
+        return new_code(str(body.get("name") or ""))
     if path == "/api/settings":
         if method == "POST":
             return save_settings(body)
@@ -373,6 +376,35 @@ def save_item(d):
     return {"item": next(i for i in billing.items(include_hidden=True) if i["name"] == name)}
 
 
+def _ean_check(d12):
+    t = sum(int(c) * (3 if i % 2 else 1) for i, c in enumerate(d12))
+    return str((10 - t % 10) % 10)
+
+
+def new_code(name):
+    """Give an item a shop barcode: an EAN-13 starting 21 (the range set aside for codes used inside one shop)."""
+    it = next((i for i in billing.items(include_hidden=True) if i["name"] == name), None)
+    if not it:
+        raise Err(404, "No such item.")
+    taken = {c for i in billing.items(include_hidden=True) for c in i["codes"]}
+    with db.write_lock:
+        n = int(db.get("next_code") or 1)
+        while True:
+            d12 = "21" + f"{n:010d}"
+            code = d12 + _ean_check(d12)
+            n += 1
+            if code not in taken:
+                break
+        db.put("next_code", n)
+        loc = db.one("SELECT * FROM item_local WHERE name=?", (name,)) or {}
+        codes = json.loads(loc.get("barcodes") or "[]") + [code]
+        with db.tx() as c:
+            c.execute("""INSERT INTO item_local(name, barcodes, updated) VALUES(?,?,?)
+                ON CONFLICT(name) DO UPDATE SET barcodes=excluded.barcodes, updated=excluded.updated""",
+                      (name, json.dumps(codes), time.time()))
+    return {"code": code, "item": next(i for i in billing.items(include_hidden=True) if i["name"] == name)}
+
+
 def save_settings(d):
     cur = db.get("settings") or {}
     shop = d.get("shop")
@@ -440,8 +472,9 @@ def save_counter(d):
 
 def tally_status():
     setup = db.get("tally_setup", {}) or {}
-    counts = {r["tally"]: r["n"] for r in db.rows("SELECT tally, COUNT(*) n FROM bill WHERE status='ok' GROUP BY tally")}
-    failed = db.rows("SELECT uid, number, date, tally_error FROM bill WHERE tally='failed' AND status='ok' ORDER BY created DESC LIMIT 50")
+    counts = {r["tally"]: r["n"] for r in db.rows("SELECT tally, COUNT(*) n FROM bill WHERE status='ok' OR tally LIKE 'cancel%' GROUP BY tally")}
+    failed = db.rows("""SELECT uid, number, date, tally_error FROM bill WHERE (tally='failed' AND status='ok') OR tally='cancel_failed'
+        ORDER BY created DESC LIMIT 50""")
     flagged = db.rows("SELECT uid, number, date, flag FROM bill WHERE flag<>'' AND status='ok' ORDER BY created DESC LIMIT 50")
     return {"url": settings()["tally_url"], "refresh_minutes": settings()["refresh_minutes"], "setup": setup,
             "choices": masters.choices(), "problems": masters.problems(setup), "state": poster.state,

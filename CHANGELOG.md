@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0
+- Product labels: name, net quantity, MFD, EXP, MRP, selling price, savings and barcode (EAN-13 or Code 128), with optional "MRP incl. of all taxes", "Packed by" and FSSAI. Label printer rolls or A4 sheets. "Make one" gives an item a shop barcode (EAN-13 starting 21) that scans at the counter
+- Cancel bills that are already in Tally: Tally's own Cancel on the bill's vouchers (kept, marked cancelled, amounts zero; nothing deleted), owner only, with a reason, until GSTR-1 for that month is due
+
 ## 0.1.1
 - Fixed: typing in the owner password, quantity, price and cash received boxes did nothing (only Enter got through)
 

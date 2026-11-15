@@ -9,7 +9,7 @@
   <Support>https://github.com/bdlnaredi/Dukaan-POS/issues</Support>
   <Project>https://github.com/bdlnaredi/Dukaan-POS</Project>
   <ReadMe>https://github.com/bdlnaredi/Dukaan-POS#readme</ReadMe>
-  <Overview>Dukaan is counter billing (POS) for a shop whose books are in TallyPrime. Bill on a phone, tablet or the counter PC with barcode scanning, print GST tax invoices on a thermal printer or send them on WhatsApp, and take cash, UPI (QR with the amount), card, split payments or credit. It keeps working offline. Every bill goes into Tally as a sales voucher with its number, items, HSN, CGST and SGST; returns go in as credit notes. GST rates and HSN codes come from Tally. Cashier PINs and permissions, one bill series per counter, and reports with GST by rate, the HSN summary and documents issued for GSTR-1. Dukaan never changes or deletes anything in Tally: it reads items and ledgers and only adds new vouchers.</Overview>
+  <Overview>Dukaan is counter billing (POS) for a shop whose books are in TallyPrime. Bill on a phone, tablet or the counter PC with barcode scanning, print GST tax invoices on a thermal printer or send them on WhatsApp, and take cash, UPI (QR with the amount), card, split payments or credit. It keeps working offline. Every bill goes into Tally as a sales voucher with its number, items, HSN, CGST and SGST; returns go in as credit notes. GST rates and HSN codes come from Tally. Cashier PINs and permissions, one bill series per counter, and reports with GST by rate, the HSN summary and documents issued for GSTR-1. Prints product labels with MFD, EXP, MRP, price, savings and barcode. Dukaan never deletes anything in Tally: it adds new vouchers, and only cancels (with Tally's Cancel) the vouchers of a bill the owner cancels.</Overview>
   <Category>Productivity: Tools:</Category>
   <ExtraSearchTerms>pos billing tally tallyprime gst invoice retail grocery kirana shop india barcode</ExtraSearchTerms>
   <WebUI>http://[IP]:[PORT:2510]/</WebUI>
@@ -18,6 +18,9 @@
   <License>GPL-3.0</License>
   <Requires>TallyPrime with its XML server on (F1 Help › Settings › Connectivity: acts as Both, port 9000) on a PC this server can reach. Setup guide: https://github.com/bdlnaredi/Dukaan-POS/blob/main/docs/INSTALL.md. For camera scanning and installing on phones, reach it over https (Cloudflare Tunnel or Tailscale).</Requires>
   <Changes>
+### 0.2.0
+- Product labels with MFD, EXP, MRP, price, savings and barcode
+- Cancel bills that are already in Tally (Tally's Cancel, nothing deleted)
 ### 0.1.1
 - Fixed: typing in the password, quantity, price and cash boxes
 ### 0.1.0
