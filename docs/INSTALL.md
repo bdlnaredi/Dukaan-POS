@@ -83,7 +83,7 @@ Keyboard on the PC: **F2** search, **F8** pay, **F4** customer, **F3** hold, **E
 3. The camera button uses Google's scanner, so there's no camera permission to give. Print uses Android's print screen; Bluetooth printers still go through RawBT.
 4. When a new version is built, the app asks to update itself.
 
-**One-time, so the app can update itself:** the app must be signed with the same key every time. In the Dukaan-POS repo on GitHub, open Settings › Secrets and variables › Actions and add `DUKAAN_KEYSTORE_B64` and `DUKAAN_KEYSTORE_PASSWORD`. Copying the same two values you set for Bahi (`BAHI_KEYSTORE_B64`, `BAHI_KEYSTORE_PASSWORD`) is fine. Then run the "Android app" workflow again. Without them the app still builds, but each new version has to be uninstalled and installed fresh.
+**One-time, so the app can update itself:** the app must be signed with the same key every time. In the Dukaan-POS repo on GitHub, open Settings › Secrets and variables › Actions and add `DUKAAN_KEYSTORE_B64` and `DUKAAN_KEYSTORE_PASSWORD`. (To use Bahi's key instead, copy its two values and also add `DUKAAN_KEY_ALIAS` = `bahi`.) Keep a copy of the key file somewhere safe: without it, future versions can't update the installed app. Then run the "Android app" workflow again. Without them the app still builds, but each new version has to be uninstalled and installed fresh.
 
 ## Stock, batches and offers
 

@@ -23,8 +23,8 @@ android {
             if (ks) {
                 storeFile file(ks)
                 storePassword System.getenv("DUKAAN_KEYSTORE_PASSWORD")
-                // the same key as the Bahi app works too (its alias is "bahi"); set DUKAAN_KEY_ALIAS for another
-                keyAlias System.getenv("DUKAAN_KEY_ALIAS") ?: "bahi"
+                // the key's name in the keystore is "dukaan"; set DUKAAN_KEY_ALIAS for another (e.g. "bahi" for Bahi's key)
+                keyAlias System.getenv("DUKAAN_KEY_ALIAS") ?: "dukaan"
                 keyPassword System.getenv("DUKAAN_KEYSTORE_PASSWORD")
             }
         }
