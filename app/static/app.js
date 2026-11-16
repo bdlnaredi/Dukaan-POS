@@ -168,36 +168,43 @@ function afterBoot() {
   clearInterval(S.t1); clearInterval(S.t2);
   S.t1 = setInterval(sync, 8000);
   S.t2 = setInterval(() => loadBoot(true).then(() => { if (S.view === "bill") renderResults(); }), 180000);
+  clearInterval(S.t3);
+  S.t3 = setInterval(refreshStock, 60000);
   sync();
+  if (counter() && settings().ask_opening && !S.askedDay) {
+    S.askedDay = true;
+    api("/api/shift?counter_id=" + counter().id).then((r) => { if (!r.shift && !$(".sheet")) daySheet(r); }).catch(() => {});
+  }
 }
 function buildNav() {
   const v = [["bill", "Billing"], ["bills", "Bills"]];
-  if (isOwner()) v.push(["reports", "Reports"], ["items", "Items"], ["labels", "Labels"], ["tally", "Tally"], ["settings", "Settings"]);
+  if (isOwner()) v.push(["reports", "Reports"], ["items", "Items"], ["offers", "Offers"], ["labels", "Labels"], ["tally", "Tally"], ["settings", "Settings"]);
   $("#nav").innerHTML = v.map(([k, l]) => `<a href="#${k}" data-v="${k}">${l}</a>`).join("");
   S.navItems = v;
 }
 function route() {
   if (!S.boot) return;
   let v = (location.hash || "#bill").slice(1);
-  if (!["bill", "bills", "reports", "items", "labels", "tally", "settings"].includes(v)) v = "bill";
+  if (!["bill", "bills", "reports", "items", "offers", "labels", "tally", "settings"].includes(v)) v = "bill";
   if (!isOwner() && !["bill", "bills"].includes(v)) v = "bill";
   S.view = v;
   $$("#nav a").forEach((a) => a.classList.toggle("on", a.dataset.v === v));
   closeMenu();
   closeSheet();
-  ({ bill: viewBill, bills: viewBills, reports: viewReports, items: viewItems, labels: viewLabels, tally: viewTally, settings: viewSettings })[v]();
+  ({ bill: viewBill, bills: viewBills, reports: viewReports, items: viewItems, offers: viewOffers, labels: viewLabels, tally: viewTally, settings: viewSettings })[v]();
 }
 function toggleMenu() {
   const m = $("#menu");
   if (!m.classList.contains("hide")) return closeMenu();
   const v = S.navItems || [["bill", "Billing"], ["bills", "Bills"]];
   m.innerHTML = v.map(([k, l]) => `<a href="#${k}">${l}</a>`).join("") +
-    `<button id="mHeld">Held bills (${S.held.length})</button><button id="mCounter">Change counter</button>` +
+    `<button id="mHeld">Held bills (${S.held.length})</button>${counter() ? '<button id="mDay">Day end / cash</button>' : ""}<button id="mCounter">Change counter</button>` +
     `<button id="mOut">Sign out</button><div class="small mute" style="padding:8px 12px">Dukaan ${E((S.boot || {}).version || "")}</div>`;
   m.classList.remove("hide");
   $("#mOut").onclick = signOut;
   $("#mCounter").onclick = () => { closeMenu(); chooseCounter(); };
   $("#mHeld").onclick = () => { closeMenu(); heldSheet(); };
+  $("#mDay") && ($("#mDay").onclick = () => { closeMenu(); daySheet(); });
   setTimeout(() => document.addEventListener("click", closeMenuOutside), 0);
 }
 function closeMenuOutside(e) { if (!$("#menu").contains(e.target) && e.target !== $("#menuBtn")) closeMenu(); }
@@ -369,7 +376,7 @@ function viewBill() {
   renderCart();
   if (matchMedia("(min-width: 900px)").matches) q.focus();
 }
-function newCart() { S.cart = { lines: [], bill_disc: 0, buyer: {} }; saveCart(); renderCart(); }
+function newCart() { S.cart = { lines: [], bill_disc: 0, buyer: {}, redeem: null }; saveCart(); renderCart(); }
 function searchItems(text) {
   const t = text.trim().toLowerCase();
   if (!t) return [];
@@ -401,7 +408,7 @@ function renderResults() {
   S.res = res; S.sel = 0;
   box.classList.remove("hide");
   box.innerHTML = res.length ? res.map((i, k) => `<div class="res${k === 0 ? " sel" : ""}${i.can_sell ? "" : " no"}" data-k="${k}">
-      <div class="grow"><div class="nm">${E(i.name)}</div><div class="small mute">${i.mrp ? "MRP " + rs(i.mrp) + " · " : ""}GST ${i.gst == null ? "?" : i.gst + "%"} · stock ${i.stock == null ? "-" : +i.stock.toFixed(3)} ${E(i.unit)}${i.can_sell ? "" : ' · <span style="color:var(--bad)">' + E(i.issues[0] || "can't sell") + "</span>"}</div></div>
+      <div class="grow"><div class="nm">${E(i.name)}</div><div class="small mute">${i.mrp ? "MRP " + rs(i.mrp) + " · " : ""}GST ${i.gst == null ? "?" : i.gst + "%"} · stock ${i.stock == null ? "-" : GST.qty(Math.max(0, leftOf(i)))} ${E(i.unit)}${i.low ? ' <span class="chip warn">low</span>' : ""}${(i.batches || []).length ? (goodBatch(i) ? (goodBatch(i).exp ? " · exp " + ddmmyy(goodBatch(i).exp) : "") : ' · <span style="color:var(--bad)">only expired batches</span>') : ""}${i.can_sell ? "" : ' · <span style="color:var(--bad)">' + E(i.issues[0] || "can't sell") + "</span>"}</div></div>
       <b class="num">${rs(i.price)}${i.loose ? '<span class="small mute">/' + E(i.unit) + "</span>" : ""}</b></div>`).join("")
     : `<div class="empty">No item matches “${E(t)}”.</div>`;
   $$(".res", box).forEach((el) => (el.onclick = () => { addItem(res[el.dataset.k]); }));
@@ -433,6 +440,22 @@ function addItem(it, qty) {
   const q = $("#q");
   if (q) { q.value = ""; renderResults(); }
   if (it.loose && qty == null) return qtySheet(it);
+  const st = settings();
+  // expiry: Dukaan's batches for this item are all past their date
+  if ((it.batches || []).length && !goodBatch(it)) {
+    const msg = `Every batch of ${it.name} in Dukaan is past its expiry date. Don't sell expired goods; check the shelf.`;
+    if (st.stock_block) { beep(false); return toast(msg, true); }
+    toast(msg, true);
+  }
+  // stock: more than is left
+  const left = leftOf(it);
+  let want = 0;
+  try { want = inCart(it.name) + GST.milli(qty || "1"); } catch (e) { /* */ }
+  if (left != null && want > left && (st.stock_warn || st.stock_block)) {
+    const msg = left > 0 ? `Only ${GST.qty(left)} ${it.unit} of ${it.name} in stock.` : `${it.name} shows no stock.`;
+    if (st.stock_block) { beep(false); return toast(msg + " Selling past stock is turned off in Settings.", true); }
+    setTimeout(() => toast(msg + " Check the count.", true), 300);
+  }
   const L = S.cart.lines;
   let line = L.find((l) => l.item === it.name && l.price === it.price && !l.disc);
   if (line && !it.loose) {
@@ -481,12 +504,35 @@ function qtySheet(it, line) {
   info();
   focusLater("#qq");
 }
+function loyaltyOn() { const lo = settings().loyalty || {}; return lo.enabled ? lo : null; }
+/* the cart with offers and points worked in: line discounts = typed + offer; bill discount = typed + bill offer + points */
+function prepCart(extra) {
+  const ex = extra || {};
+  const L = S.cart.lines;
+  const off = Offers.apply(L, (S.boot && S.boot.offers) || [], todayISO(), S.byName);
+  const lines = L.map((l, i) => ({ ...l, disc: (l.disc || 0) + off.lines[i].disc }));
+  const lo = loyaltyOn();
+  const redeem = !ex.noRedeem && lo && S.cart.redeem ? S.cart.redeem.points * lo.value : 0;
+  const manual = ex.bill_disc != null ? ex.bill_disc : S.cart.bill_disc || 0;
+  return { lines, off, redeem, manual, bill_disc: manual + (off.bill ? off.bill.amount : 0) + redeem };
+}
 function calcCart(extra) {
   try {
-    const c = GST.compute({ lines: S.cart.lines, bill_disc: S.cart.bill_disc || 0, round: settings().round !== false, buyer: S.cart.buyer || {}, ...(extra || {}) });
+    const p = prepCart(extra);
+    const c = GST.compute({ lines: p.lines, bill_disc: p.bill_disc, round: settings().round !== false, buyer: S.cart.buyer || {} });
+    c.prep = p;
     return c;
   } catch (e) { return { error: e.message }; }
 }
+/* how much of an item is left (thousandths): live stock less this device's bills not yet sent; null when unknown */
+function leftOf(it) {
+  if (!it || it.stock == null) return null;
+  let q = Math.round(it.stock * 1000);
+  for (const b of S.queue) for (const l of b.lines) if (l.item === it.name) { try { q -= GST.milli(l.qty); } catch (e) { /* */ } }
+  return q;
+}
+function inCart(name) { return S.cart.lines.filter((l) => l.item === name).reduce((a, l) => { try { return a + GST.milli(l.qty); } catch (e) { return a; } }, 0); }
+function goodBatch(it) { return (it.batches || []).find((b) => !b.expired && b.left > 0); }
 function nextNumberPreview() {
   const c = counter();
   if (!c) return "";
@@ -499,13 +545,18 @@ function renderCart(flashKey) {
   const box = $("#lines");
   if (!box) return;
   $("#nextNo").textContent = nextNumberPreview();
-  box.innerHTML = L.length ? L.map((l) => {
+  const off = Offers.apply(L, (S.boot && S.boot.offers) || [], todayISO(), S.byName);
+  box.innerHTML = L.length ? L.map((l, i) => {
     const gross = (() => { try { return GST.roundDiv(l.price * GST.milli(l.qty), 1000); } catch (e) { return 0; } })();
+    const o = off.lines[i] || { disc: 0 };
+    const it = S.byName[l.item];
+    const left = leftOf(it);
+    const short = left != null && inCart(l.item) > left;
     return `<div class="ln${l.key === flashKey ? " flash" : ""}" data-k="${l.key}">
       <div class="nm" data-edit>${E(l.item)}</div>
       <div class="qty">${l.decimals ? `<button data-edit>✎</button><input value="${E(l.qty)}" readonly data-edit>` : `<button data-d="-1">−</button><input value="${E(l.qty)}" inputmode="numeric" data-q><button data-d="1">+</button>`}</div>
-      <div class="amt num">${rs(gross - (l.disc || 0))}</div>
-      <div class="meta">${rs(l.price)}${l.decimals ? "/" + E(l.unit) : ""}${l.mrp && l.mrp > l.price ? ` · MRP ${rs(l.mrp)}` : ""} · GST ${l.gst}%${l.disc ? ` · <span style="color:var(--ok)">−${rs(l.disc)}</span>` : ""}</div>
+      <div class="amt num">${rs(gross - (l.disc || 0) - o.disc)}</div>
+      <div class="meta">${rs(l.price)}${l.decimals ? "/" + E(l.unit) : ""}${l.mrp && l.mrp > l.price ? ` · MRP ${rs(l.mrp)}` : ""} · GST ${l.gst}%${l.disc ? ` · <span style="color:var(--ok)">−${rs(l.disc)}</span>` : ""}${o.offer ? ` · <span class="chip ok">${E(o.offer.name)} −${rs(o.disc)}</span>` : ""}${short ? ` · <span style="color:var(--bad)">only ${GST.qty(Math.max(0, left))} in stock</span>` : ""}</div>
     </div>`;
   }).join("") : `<div class="empty">No items yet.<br><span class="small">Search or scan to add.</span></div>`;
   $$(".ln", box).forEach((el) => {
@@ -536,10 +587,14 @@ function renderCart(flashKey) {
     $("#tot").innerHTML = `<div class="t grand"><span>Total</span><span class="num">${rs(0)}</span></div>`;
   } else {
     const gross = c.lines.reduce((a, l) => a + l.gross, 0);
-    const disc = c.lines.reduce((a, l) => a + l.disc, 0);
+    const p = c.prep;
+    const offAmt = p.off.lines.reduce((a, x) => a + x.disc, 0) + (p.off.bill ? p.off.bill.amount : 0);
+    const manual = L.reduce((a, l) => a + (l.disc || 0), 0) + p.manual;
     $("#tot").innerHTML = `
       <div class="t"><span>${qtyCount} item${qtyCount > 1 ? "s" : ""}</span><span class="num">${rs(gross)}</span></div>
-      ${disc ? `<div class="t save"><span>Discount</span><span class="num">−${rs(disc)}</span></div>` : ""}
+      ${offAmt ? `<div class="t save"><span>Offers${p.off.bill ? " (" + E(p.off.bill.name) + ")" : ""}</span><span class="num">−${rs(offAmt)}</span></div>` : ""}
+      ${manual ? `<div class="t save"><span>Discount</span><span class="num">−${rs(manual)}</span></div>` : ""}
+      ${p.redeem ? `<div class="t save"><span>${S.cart.redeem.points} points used</span><span class="num">−${rs(p.redeem)}</span></div>` : ""}
       <div class="t"><span>Taxable ${rs(c.taxable)} + GST</span><span class="num">${rs(c.cgst + c.sgst)}</span></div>
       ${c.round_off ? `<div class="t"><span>Round off</span><span class="num">${c.round_off > 0 ? "+" : "−"}${rs(Math.abs(c.round_off))}</span></div>` : ""}
       <div class="t grand"><span>Total</span><span class="num">${rs(c.amount)}</span></div>
@@ -617,11 +672,13 @@ function customerSheet() {
       <label class="f"><span>Address</span><textarea class="in" id="cAd" rows="2">${E(b.address)}</textarea></label>
       <label class="f"><span>GSTIN (only for a business that wants GST credit)</span><input class="in" id="cG" value="${E(b.gstin)}" style="text-transform:uppercase" maxlength="15"></label>
       <div class="small mute">For bills of ₹50,000 or more, name and address are required (GST rule 46).</div>
+      <div id="cPts" class="small" style="margin-top:8px"></div>
     </div>
     <div id="cTally" class="${b.ledger ? "" : "hide"}">
       <input class="in" id="cQ" placeholder="Search customers in Tally">
       <div class="list" id="cList" style="max-height:45vh;overflow:auto"></div>
-      <label class="f"><span>Mobile number (for WhatsApp)</span><input class="in" id="cPh2" inputmode="tel" value="${E(b.phone)}"></label>
+      <label class="f"><span>Mobile number (for WhatsApp${loyaltyOn() ? " and points" : ""})</span><input class="in" id="cPh2" inputmode="tel" value="${E(b.phone)}"></label>
+      <div id="cPts2" class="small" style="margin-top:8px"></div>
     </div>`, `<button class="btn" id="cX">Walk-in, no details</button><button class="btn pri" id="cOk">Done</button>`);
   let mode = b.ledger ? "tally" : "walk", picked = b.ledger ? cust.find((c) => c.name === b.ledger) : null;
   $$(".seg button", s).forEach((x) => (x.onclick = () => {
@@ -639,8 +696,24 @@ function customerSheet() {
   };
   $("#cQ").oninput = list;
   list();
+  const pts = (inp, box) => {
+    const ph = $(inp).value.replace(/\D/g, "").slice(-10);
+    if (!loyaltyOn() || !/^[6-9]\d{9}$/.test(ph)) { $(box).innerHTML = ""; return; }
+    $(box).innerHTML = '<span class="mute">Looking up points…</span>';
+    api("/api/loyalty?phone=" + ph).then((r) => {
+      const c = r.customer, lo = loyaltyOn();
+      S.cart.pts = { phone: ph, points: c.points };
+      if (c.name && inp === "#cPh" && !$("#cNm").value) $("#cNm").value = c.name;
+      $(box).innerHTML = `⭐ <b>${c.points} points</b> (worth ${rs(c.points * lo.value)})${c.points < lo.min ? ` · can use from ${lo.min}` : ""}`;
+    }).catch((e) => { $(box).innerHTML = `<span class="mute">${e.offline ? "Offline: points can't be checked, but this bill still earns them." : E(e.message)}</span>`; });
+  };
+  $("#cPh").addEventListener("input", () => pts("#cPh", "#cPts"));
+  $("#cPh2").addEventListener("input", () => pts("#cPh2", "#cPts2"));
+  if (b.phone) pts(b.ledger ? "#cPh2" : "#cPh", b.ledger ? "#cPts2" : "#cPts");
   $("#cX").onclick = () => { S.cart.buyer = {}; saveCart(); closeSheet(); renderCart(); };
   $("#cOk").onclick = () => {
+    const oldPhone = (S.cart.buyer || {}).phone;
+    setTimeout(() => { if ((S.cart.buyer || {}).phone !== oldPhone) { S.cart.redeem = null; saveCart(); renderCart(); } }, 0);
     if (mode === "tally") {
       if (!picked) return toast("Pick a customer from the list.", true);
       S.cart.buyer = { ledger: picked.name, name: picked.name, gstin: picked.gstin || "", phone: $("#cPh2").value.trim() };
@@ -693,10 +766,36 @@ function paySheet() {
   let mode = "cash";
   const s = sheet("Payment", `<div class="paytot"><div class="small mute">To pay</div><div class="a num">${rs(total)}</div>
       <div class="small mute">${c.title}${c.b2b ? " · B2B (GSTIN " + E(b.gstin) + ")" : ""}</div></div>
+    <div id="ptsBox"></div>
     <div class="modes">${["cash", "upi", "card", "split", "credit"].map((m) => `<button data-m="${m}" class="${m === mode ? "on" : ""}">${ICON[m]}${m === "split" ? "Split" : MODE[m]}</button>`).join("")}</div>
     <div id="payBody" style="margin-top:12px"></div>`,
   `<button class="btn" id="pBack">Back</button><button class="btn pri big" id="pOk">Done · print</button>`, { wide: false });
   const body = $("#payBody");
+  // loyalty points: shown when the customer's mobile number is on the bill
+  const lo = loyaltyOn();
+  if (lo && /^[6-9]\d{9}$/.test(b.phone || "")) {
+    const box = $("#ptsBox");
+    const show = (bal) => {
+      const before = calcCart({ noRedeem: true });
+      const maxByBill = Math.floor(Math.floor((before.amount * lo.max_pct) / 100) / lo.value);
+      const can = Math.max(0, Math.min(bal, maxByBill));
+      const used = S.cart.redeem ? S.cart.redeem.points : 0;
+      box.innerHTML = `<div class="note ok row wrap" style="gap:8px">⭐ <span class="grow"><b>${bal} points</b> (${rs(bal * lo.value)})${used ? ` · using <b>${used}</b> (−${rs(used * lo.value)})` : bal < lo.min ? ` · can use from ${lo.min}` : ""}</span>
+        ${used ? '<button class="btn sm" id="ptsX">Don\'t use</button>' : bal >= lo.min && can > 0 ? `<input class="in" id="ptsN" inputmode="numeric" value="${can}" style="width:90px"><button class="btn sm pri" id="ptsUse">Use points</button>` : ""}</div>`;
+      $("#ptsX") && ($("#ptsX").onclick = () => { S.cart.redeem = null; saveCart(); renderCart(); paySheet(); });
+      $("#ptsUse") && ($("#ptsUse").onclick = () => {
+        const n = parseInt($("#ptsN").value, 10);
+        if (!(n >= lo.min) || n > can) return toast(`Use between ${lo.min} and ${can} points.`, true);
+        S.cart.redeem = { points: n }; saveCart(); renderCart(); paySheet();
+      });
+    };
+    if (S.cart.pts && S.cart.pts.phone === b.phone) show(S.cart.pts.points);
+    else {
+      box.innerHTML = '<div class="small mute" style="margin-bottom:8px">Looking up points…</div>';
+      api("/api/loyalty?phone=" + b.phone).then((r) => { S.cart.pts = { phone: b.phone, points: r.customer.points }; show(r.customer.points); })
+        .catch(() => { box.innerHTML = S.cart.redeem ? '<div class="note bad">Offline: points can\'t be checked, so they can\'t be used now.</div>' : ""; if (S.cart.redeem) { S.cart.redeem = null; saveCart(); renderCart(); paySheet(); } });
+    }
+  }
   const draw = () => {
     $$(".modes button", s).forEach((x) => x.classList.toggle("on", x.dataset.m === mode));
     if (mode === "cash") {
@@ -799,13 +898,17 @@ function finishBill(c, pays, tendered) {
   const number = `${settings().prefix || ""}${cn.series}/${fy}/${n}`;
   const bill = {
     uid: newId(), counter_id: cn.id, number, date: day, time: nowTime(), created: Date.now() / 1000,
-    lines: S.cart.lines.map((l) => ({ item: l.item, qty: l.qty, price: l.price, mrp: l.mrp || 0, gst: l.gst, disc: l.disc || 0, hsn: l.hsn })),
-    bill_disc: S.cart.bill_disc || 0, round: settings().round !== false, buyer: S.cart.buyer || {},
+    lines: c.prep.lines.map((l) => ({ item: l.item, qty: l.qty, price: l.price, mrp: l.mrp || 0, gst: l.gst, disc: l.disc || 0, hsn: l.hsn })),
+    bill_disc: c.prep.bill_disc, round: settings().round !== false, buyer: S.cart.buyer || {},
     payments: pays, tendered, amount: c.amount, link: linkId(), offline: !S.online,
+    offers: c.prep.off.used,
+    loyalty: c.prep.redeem ? { points: S.cart.redeem.points, value: c.prep.redeem } : null,
   };
+  const lo = loyaltyOn();
+  const earned = lo && /^[6-9]\d{9}$/.test((bill.buyer || {}).phone || "") ? Math.floor((c.amount * lo.per100) / 10000) : 0;
   S.queue.push(bill);
   LS.set("dk_queue", S.queue);
-  const rec = { ...bill, kind: "sale", calc: c, units: Object.fromEntries(S.cart.lines.map((l) => [l.item, l.unit])), counter: cn.name, cashier: me().name };
+  const rec = { ...bill, kind: "sale", calc: { ...c, prep: undefined }, points_earned: earned, units: Object.fromEntries(S.cart.lines.map((l) => [l.item, l.unit])), counter: cn.name, cashier: me().name };
   S.recent.unshift(rec);
   S.recent = S.recent.slice(0, 150);
   LS.set("dk_recent", S.recent);
@@ -875,6 +978,9 @@ function receiptHTML(rec, a4) {
     if (rec.tendered && rec.tendered > c.amount) h += `<div>Cash given Rs ${GST.rs(rec.tendered)}, change Rs ${GST.rs(rec.tendered - c.amount)}</div>`;
     const due = c.amount - pays.reduce((a, p) => a + p.amount, 0);
     if (due > 0) h += `<div class="b">On credit: Rs ${GST.rs(due)}</div>`;
+    for (const o of rec.offers || []) h += `<div>Offer: ${E(o.name)} -Rs ${GST.rs(o.amount)}</div>`;
+    if (rec.loyalty) h += `<div>Points used: ${rec.loyalty.points} (-Rs ${GST.rs(rec.loyalty.value)})</div>`;
+    if (rec.points_earned) h += `<div>Points earned on this bill: ${rec.points_earned}</div>`;
     if (c.savings) h += `<div class="c b">You saved Rs ${GST.rs(c.savings)} on MRP</div>`;
   }
   h += `<div class="small">${E(GST.words(c.amount))}</div>
@@ -887,7 +993,7 @@ function printReceipt(rec) {
   const css = w === "a4" ? "@page{size:A4;margin:12mm} #printarea{width:100%}" : `@page{size:${w}mm auto;margin:2mm} #printarea{width:${w === "58" ? 52 : 74}mm} .rc{font-size:${w === "58" ? 10.5 : 12}px}`;
   $("#pagestyle").textContent = "@media print{" + css + "}";
   $("#printarea").innerHTML = receiptHTML(rec, w === "a4");
-  setTimeout(() => window.print(), 50);
+  setTimeout(() => doPrint(), 50);
 }
 function receiptText(rec, W) {
   const sh = shopInfo(), c = rec.calc, ret = rec.kind === "return";
@@ -928,6 +1034,9 @@ function receiptText(rec, W) {
     if (rec.tendered && rec.tendered > c.amount) L.push(lr("Change", GST.rs(rec.tendered - c.amount)));
     const due = c.amount - (rec.payments || []).reduce((a, p) => a + p.amount, 0);
     if (due > 0) L.push(lr("On credit", GST.rs(due)));
+    for (const o of rec.offers || []) L.push(lr("Offer " + o.name.slice(0, W - 12), "-" + GST.rs(o.amount)));
+    if (rec.loyalty) L.push(lr("Points used " + rec.loyalty.points, "-" + GST.rs(rec.loyalty.value)));
+    if (rec.points_earned) L.push("Points earned: " + rec.points_earned);
     if (c.savings) L.push(center("You saved Rs " + GST.rs(c.savings)));
   } else L.push("Refund: " + (MODE[rec.refund] || rec.refund));
   L.push("Place of supply: " + (sh.state || "") + " " + (sh.gstin || "").slice(0, 2));
@@ -1005,8 +1114,37 @@ function syncInfo() {
 }
 
 // ---------------------------------------------------------------- camera scanning
+// ---------------------------------------------------------------- the Android app (window.DukaanAndroid)
+const ANDROID = typeof window.DukaanAndroid !== "undefined";
+function doPrint() {
+  if (ANDROID) { try { return window.DukaanAndroid.printPage("Dukaan"); } catch (e) { /* fall back */ } }
+  window.print();
+}
+const scanWaiting = {};
+window.dukaanScanned = (id, code, err) => {
+  const f = scanWaiting[id];
+  delete scanWaiting[id];
+  if (err) toast("Scanner: " + err, true);
+  if (f) f(code);
+};
+function androidScan(onCode) {
+  const id = newId();
+  scanWaiting[id] = onCode;
+  window.DukaanAndroid.scan(id);
+}
 async function camera(onCode) {
   const single = typeof onCode === "function";
+  if (ANDROID) {
+    if (single) return androidScan((code) => code && onCode(code));
+    // billing: scan, add, and open the scanner again until it's closed
+    const again = () => androidScan((code) => {
+      if (!code) return;
+      const it = S.byCode[code.toLowerCase()];
+      if (it) { addItem(it); if (it.loose) return; } else { beep(false); toast("No item has barcode " + code, true); }
+      setTimeout(again, 400);
+    });
+    return again();
+  }
   if (!("BarcodeDetector" in window)) return toast("This browser can't scan with the camera. Use Chrome on Android, or a USB/Bluetooth barcode scanner.", true);
   let stream;
   try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }); } catch (e) { return toast("Camera not allowed. Allow it in the browser's site settings (needs https).", true); }
@@ -1159,7 +1297,7 @@ function toRec(b) {
   const d = b.data;
   return { uid: b.uid, kind: b.kind, number: b.number, date: b.date, time: b.time, calc: b.calc, lines: d.lines, buyer: d.buyer,
     payments: d.payments, tendered: d.tendered, counter: d.counter, cashier: b.cashier, link: b.link, refund: d.refund,
-    orig_number: d.orig_number, orig_date: d.orig_date, units: Object.fromEntries((d.lines || []).map((l) => [l.item, l.unit])) };
+    orig_number: d.orig_number, orig_date: d.orig_date, offers: d.offers, loyalty: d.loyalty, points_earned: d.points_earned, units: Object.fromEntries((d.lines || []).map((l) => [l.item, l.unit])) };
 }
 function returnSheet(b, reload) {
   const c = b.calc;
@@ -1213,9 +1351,13 @@ function viewReports() {
     S.repRange = [f, to];
     $$("#rr button").forEach((b) => b.classList.toggle("on", ranges[b.dataset.r][0] === f && ranges[b.dataset.r][1] === to));
     $("#rep").innerHTML = '<div class="card mute">Loading…</div>';
-    let s, h, dc;
+    let s, h, dc, sh = { shifts: [] }, low = 0, exp = 0;
     try {
       [s, h, dc] = await Promise.all([api(`/api/reports/summary?from=${f}&to=${to}`), api(`/api/reports/hsn?from=${f}&to=${to}`), api(`/api/reports/docs?from=${f}&to=${to}`)]);
+      if (isOwner()) {
+        const [a, b, c] = await Promise.all([api(`/api/shifts?from=${f}&to=${to}`), api("/api/items"), api("/api/batches?filter=expiring")]);
+        sh = a; low = b.items.filter((i) => i.low && !i.hidden).length; exp = c.batches.length;
+      }
     } catch (e) { $("#rep").innerHTML = `<div class="note bad">${E(e.message)}</div>`; return; }
     const kpi = (l, v, sub) => `<div class="kpi"><div class="l">${l}</div><div class="v num">${v}</div>${sub ? `<div class="small mute">${sub}</div>` : ""}</div>`;
     const sum = (arr, k) => arr.reduce((a, r) => a + r[k], 0);
@@ -1238,14 +1380,25 @@ function viewReports() {
         ${h.rows.map((r) => `<tr><td><span class="chip ${r.b2b ? "acc" : ""}">${r.b2b ? "B2B" : "B2C"}</span></td><td>${E(r.hsn) || '<span style="color:var(--bad)">missing</span>'}</td><td>${E(r.unit)}</td><td class="r">${GST.qty(r.qm)}</td><td class="r">${r.gst}%</td><td class="r num">${rs(r.taxable)}</td><td class="r num">${rs(r.cgst)}</td><td class="r num">${rs(r.sgst)}</td><td class="r num">${rs(r.value)}</td></tr>`).join("") || '<tr><td colspan="9" class="mute">No sales.</td></tr>'}</table></div></div>
       <div class="card" style="margin-top:12px"><h3 style="margin-top:0">Documents issued (GSTR-1 table 13)</h3><div class="tw"><table class="t"><tr><th>Document</th><th>From</th><th>To</th><th class="r">Total</th><th class="r">Cancelled</th><th class="r">Net issued</th></tr>
         ${dc.rows.map((r) => `<tr><td>${E(r.kind)}</td><td>${E(r.from)}</td><td>${E(r.to)}</td><td class="r">${r.total}</td><td class="r">${r.cancelled}</td><td class="r">${r.net}</td></tr>${r.missing.length ? `<tr><td colspan="6" class="small" style="color:var(--warn)">Numbers not received from a counter (counted as cancelled): ${r.missing.join(", ")}</td></tr>` : ""}`).join("") || '<tr><td colspan="6" class="mute">None.</td></tr>'}</table></div></div>
+      ${low || exp ? `<div class="note" style="margin-top:12px">${low ? `<b>${low}</b> item(s) low on stock. ` : ""}${exp ? `<b>${exp}</b> batch(es) expired or expiring soon. ` : ""}<a href="#items">See Items</a></div>` : ""}
+      <div class="cols" style="margin-top:12px">
+        <div class="card"><h3 style="margin-top:0">Offers and points</h3>
+          ${s.offers.length ? `<table class="t">${s.offers.map((o) => `<tr><td>${E(o.name)}</td><td class="r">${o.bills} bills</td><td class="r num">${rs(o.amount)}</td></tr>`).join("")}</table>` : '<p class="small mute">No offers used.</p>'}
+          ${s.points.used || s.points.earned ? `<p class="small">Points earned ${s.points.earned} · used ${s.points.used} (${rs(s.points.value)} off bills)</p>` : ""}</div>
+        <div class="card"><h3 style="margin-top:0">Day closings</h3>
+          ${sh.shifts.length ? `<table class="t"><tr><th>Counter</th><th>Day</th><th class="r">Should be</th><th class="r">Counted</th><th class="r">Diff</th></tr>${sh.shifts.map((x) => `<tr data-sh="${x.id}" style="cursor:pointer"><td>${E(x.counter || "")}</td><td>${new Date(x.opened_at * 1000).toLocaleDateString()}<div class="small mute">${E(x.closed_by || "open")}</div></td>
+            <td class="r num">${x.closed_at ? rs(x.expected) : "-"}</td><td class="r num">${x.closed_at ? rs(x.counted) : "-"}</td>
+            <td class="r num" style="color:${!x.closed_at ? "inherit" : x.diff === 0 ? "var(--ok)" : "var(--bad)"}">${!x.closed_at ? '<span class="chip warn">open</span>' : x.diff === 0 ? "0" : (x.diff < 0 ? "−" : "+") + rs(Math.abs(x.diff))}</td></tr>`).join("")}</table>` : '<p class="small mute">No days closed in this period.</p>'}</div></div>
       <div class="card" style="margin-top:12px"><div class="row"><h3 class="grow" style="margin:0">Top items</h3><button class="btn sm" id="dlB">Download all bills (CSV)</button></div>
         <table class="t">${s.top.map((x) => `<tr><td>${E(x.item)}</td><td class="r">${GST.qty(x.qm)}</td><td class="r num">${rs(x.amount)}</td></tr>`).join("")}</table></div>`;
     $("#dlH").onclick = () => download(`/api/reports/hsn.csv?from=${f}&to=${to}`, `hsn-${f}-${to}.csv`);
     $("#dlB").onclick = () => download(`/api/reports/bills.csv?from=${f}&to=${to}`, `bills-${f}-${to}.csv`);
+    $$("[data-sh]").forEach((el) => (el.onclick = () => { const x = sh.shifts.find((y) => y.id === Number(el.dataset.sh)); if (x.closed_at) closedSheet(x, null); }));
   }
   load();
 }
 async function download(path, name) {
+  if (ANDROID) { try { return window.DukaanAndroid.download(location.origin + path, name, S.token || ""); } catch (e) { /* fall back */ } }
   try {
     const r = await api(path, undefined, true);
     const blob = await r.blob();
@@ -1260,17 +1413,31 @@ async function download(path, name) {
 // ---------------------------------------------------------------- items (owner)
 async function viewItems() {
   $("#app").innerHTML = `<div class="card"><div class="row wrap"><h2 class="grow" style="margin:0">Items</h2>
-    <div class="seg" id="iF"><button data-f="all" class="on">All</button><button data-f="bad">Can't sell</button><button data-f="fav">Favourites</button><button data-f="hidden">Hidden</button></div></div>
+    <div class="seg" id="iF"><button data-f="all" class="on">All</button><button data-f="bad">Can't sell</button><button data-f="low">Low stock</button><button data-f="exp">Expiring</button><button data-f="fav">Favourites</button><button data-f="hidden">Hidden</button></div></div>
     <input class="in" id="iQ" placeholder="Search items" style="margin-top:10px"><div id="iInfo" class="small mute" style="margin:8px 0"></div><div id="iList" class="list"></div></div>`;
   let items = [], f = "all";
   try { items = (await api("/api/items")).items; } catch (e) { $("#iList").innerHTML = `<div class="note bad">${E(e.message)}</div>`; return; }
-  const draw = () => {
+  const drawExp = async () => {
+    let r;
+    try { r = await api("/api/batches?filter=expiring"); } catch (e) { $("#iList").innerHTML = `<div class="note bad">${E(e.message)}</div>`; return; }
     const q = $("#iQ").value.toLowerCase();
-    const r = items.filter((i) => (f === "all" ? !i.hidden : f === "bad" ? !i.can_sell || i.issues.length : f === "fav" ? i.fav : i.hidden) && (!q || (i.name + " " + i.codes.join(" ")).toLowerCase().includes(q)));
+    const rows = r.batches.filter((b) => !q || b.item.toLowerCase().includes(q));
+    $("#iInfo").innerHTML = `Batches with stock that are past their date or expire within ${r.expiry_days} days (soonest first). Only batches entered in Dukaan are known.`;
+    $("#iList").innerHTML = rows.map((b) => `<div class="it" data-n="${E(b.item)}"><div class="grow"><b>${E(b.item)}</b> ${b.no ? `<span class="chip">${E(b.no)}</span>` : ""}
+      <div class="small mute">${b.left} left · MFD ${ddmmyy(b.mfd) || "-"} · EXP ${ddmmyy(b.exp)}</div></div>
+      <span class="chip ${b.expired ? "bad" : "warn"}">${b.expired ? "expired" : b.days === 0 ? "expires today" : `${b.days} day${b.days > 1 ? "s" : ""}`}</span></div>`).join("") || '<div class="empty">Nothing expires soon.</div>';
+    $$("#iList .it").forEach((el) => (el.onclick = () => itemSheet(items.find((x) => x.name === el.dataset.n), (ni) => Object.assign(items.find((x) => x.name === ni.name), ni))));
+  };
+  const draw = () => {
+    if (f === "exp") return drawExp();
+    const q = $("#iQ").value.toLowerCase();
+    const r = items.filter((i) => (f === "all" ? !i.hidden : f === "bad" ? !i.can_sell || i.issues.length : f === "low" ? i.low && !i.hidden : f === "fav" ? i.fav : i.hidden) && (!q || (i.name + " " + i.codes.join(" ")).toLowerCase().includes(q)));
     const bad = items.filter((i) => !i.can_sell).length;
-    $("#iInfo").innerHTML = `${items.length} items from Tally. ${bad ? `<b style="color:var(--bad)">${bad} can't be sold yet</b> (missing GST rate or HSN, or price above MRP).` : "All items can be sold."} Prices, barcodes and favourites are kept in Dukaan; Tally isn't changed.`;
+    const low = items.filter((i) => i.low && !i.hidden).length;
+    $("#iInfo").innerHTML = f === "low" ? "Items at or below their reorder level (set it on each item). Stock is live: Tally's last count less bills since."
+      : `${items.length} items from Tally. ${bad ? `<b style="color:var(--bad)">${bad} can't be sold yet</b> (missing GST rate or HSN, or price above MRP).` : "All items can be sold."}${low ? ` <b style="color:var(--warn)">${low} low on stock.</b>` : ""} Prices, barcodes and favourites are kept in Dukaan; Tally isn't changed.`;
     $("#iList").innerHTML = r.slice(0, 300).map((i) => `<div class="it" data-n="${E(i.name)}"><div class="grow"><b>${E(i.name)}</b> ${i.fav ? "⭐" : ""}
-      <div class="small mute">${rs(i.price)}${i.mrp ? " · MRP " + rs(i.mrp) : ""} · GST ${i.gst == null ? "?" : i.gst + "%"} · HSN ${E(i.hsn || "?")} · ${i.codes.length ? i.codes.length + " barcode" + (i.codes.length > 1 ? "s" : "") : "no barcode"} · stock ${i.stock == null ? "-" : +i.stock.toFixed(3)} ${E(i.unit)}</div>
+      <div class="small mute">${rs(i.price)}${i.mrp ? " · MRP " + rs(i.mrp) : ""} · GST ${i.gst == null ? "?" : i.gst + "%"} · HSN ${E(i.hsn || "?")} · ${i.codes.length ? i.codes.length + " barcode" + (i.codes.length > 1 ? "s" : "") : "no barcode"} · stock <b>${i.stock == null ? "-" : +i.stock.toFixed(3)}</b> ${E(i.unit)}${i.min_stock != null ? ` (reorder at ${+i.min_stock})` : ""} ${i.low ? '<span class="chip warn">low</span>' : ""}</div>
       ${i.issues.length ? `<div class="small" style="color:var(--bad)">${E(i.issues.join(" · "))}</div>` : ""}</div></div>`).join("") + (r.length > 300 ? `<div class="empty">${r.length - 300} more. Search to narrow down.</div>` : "") || '<div class="empty">No items.</div>';
     $$("#iList .it").forEach((el) => (el.onclick = () => itemSheet(items.find((x) => x.name === el.dataset.n), (ni) => { Object.assign(items.find((x) => x.name === ni.name), ni); draw(); })));
   };
@@ -1286,6 +1453,15 @@ function itemSheet(i, done) {
     <label class="f"><span>MRP (₹)</span><input class="in" id="im" inputmode="decimal" value="${i.mrp ? (i.mrp / 100).toFixed(2) : ""}"></label></div>
     <label class="f"><span>Barcodes</span><div class="row"><input class="in grow" id="ic" placeholder="Scan or type, then Add"><button class="btn" id="icAdd">Add</button><button class="btn" id="icCam">${ICON.scan}</button></div></label>
     <div id="icList" class="row wrap" style="margin-top:6px"></div>
+    <div class="grid2"><label class="f"><span>Stock now (live)</span><input class="in" disabled value="${i.stock == null ? "-" : +i.stock.toFixed(3)} ${E(i.unit)}"></label>
+    <label class="f"><span>Reorder level (warn at or below)</span><input class="in" id="imin" inputmode="decimal" value="${i.min_stock == null ? "" : +i.min_stock}" placeholder="e.g. 10"></label></div>
+    <div class="small mute">Live stock = Tally's stock when last copied, less bills since that aren't in it yet.</div>
+    <h3>Batches and expiry</h3><div id="ibList" class="small"></div>
+    <details><summary class="small"><b>Add a batch</b> (stock that came in)</summary>
+      <div class="grid2"><label class="f"><span>Batch no. (optional)</span><input class="in" id="ibNo"></label>
+      <label class="f"><span>Quantity (${E(i.unit)})</span><input class="in" id="ibQ" inputmode="decimal"></label>
+      <label class="f"><span>MFD</span><input class="in" type="date" id="ibM"></label><label class="f"><span>EXP</span><input class="in" type="date" id="ibE"></label></div>
+      <button class="btn sm" id="ibAdd" style="margin-top:8px">Add batch</button></details>
     <label class="chk"><input type="checkbox" id="il" ${i.loose ? "checked" : ""}> Loose / weighed (ask for the quantity each time)</label>
     <label class="chk"><input type="checkbox" id="ifv" ${i.fav ? "checked" : ""}> Favourite (quick button on the billing screen)</label>
     <label class="chk"><input type="checkbox" id="ih" ${i.hidden ? "checked" : ""}> Hide from billing</label>
@@ -1303,13 +1479,35 @@ function itemSheet(i, done) {
   $("#ic").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); add($("#ic").value); } };
   $("#icCam").onclick = () => camera(add);
   drawCodes();
+  const loadB = async () => {
+    let r;
+    try { r = await api("/api/batches?filter=all&item=" + encodeURIComponent(i.name)); } catch (e) { $("#ibList").textContent = e.message; return; }
+    $("#ibList").innerHTML = r.batches.length ? `<table class="t"><tr><th>Batch</th><th>MFD</th><th>EXP</th><th class="r">Left</th><th></th></tr>${r.batches.map((b) => `<tr>
+      <td>${E(b.no || "-")}</td><td>${ddmmyy(b.mfd)}</td><td>${ddmmyy(b.exp)} ${b.expired ? '<span class="chip bad">expired</span>' : b.days != null && b.days <= r.expiry_days ? '<span class="chip warn">soon</span>' : ""}</td>
+      <td class="r">${b.left} / ${b.qty}</td><td class="r"><button class="btn sm" data-lb="${b.id}">Labels</button> <button class="btn sm ghost" data-rb="${b.id}">✕</button></td></tr>`).join("")}</table>`
+      : '<span class="mute">No batches entered. Add one when stock comes in to track its expiry; sales then take the batch that expires first.</span>';
+    $$("[data-rb]").forEach((x) => (x.onclick = async () => { if (!confirm("Remove this batch from Dukaan?")) return; await api("/api/batch/remove", { id: Number(x.dataset.rb) }); loadB(); }));
+    $$("[data-lb]").forEach((x) => (x.onclick = () => {
+      const b = r.batches.find((y) => y.id === Number(x.dataset.lb));
+      S.labelPrefill = { item: i.name, mfd: b.mfd, exp: b.exp, copies: Math.max(1, Math.min(500, Math.floor(parseFloat(b.left) || 1))) };
+      closeSheet(); location.hash = "#labels";
+    }));
+  };
+  loadB();
+  $("#ibAdd").onclick = async () => {
+    try {
+      await api("/api/batch", { item: i.name, no: $("#ibNo").value, qty: $("#ibQ").value.trim(), mfd: $("#ibM").value, exp: $("#ibE").value, mrp: i.mrp || 0 });
+      $("#ibNo").value = $("#ibQ").value = $("#ibM").value = $("#ibE").value = "";
+      toast("Batch added."); loadB(); refreshStock();
+    } catch (e) { toast(e.message, true); }
+  };
   $("#iX").onclick = closeSheet;
   $("#iOk").onclick = async () => {
     const price = GST.paise($("#ip").value), mrp = $("#im").value.trim() ? GST.paise($("#im").value) : 0;
     if (isNaN(price) || isNaN(mrp)) return toast("Check the price and MRP.", true);
     try {
       const r = await api("/api/item", { name: i.name, price: price === i.tally.price ? null : price, mrp: mrp === i.tally.mrp ? null : mrp, codes,
-        loose: $("#il").checked, fav: $("#ifv").checked, hidden: $("#ih").checked, gst: $("#ig").value, hsn: $("#ihs").value.trim() });
+        loose: $("#il").checked, min_stock: $("#imin").value.trim(), fav: $("#ifv").checked, hidden: $("#ih").checked, gst: $("#ig").value, hsn: $("#ihs").value.trim() });
       closeSheet();
       toast("Saved. Counters get it when they next reload items.");
       done(r.item);
@@ -1361,6 +1559,7 @@ async function viewTally() {
         <div class="tw"><table class="t"><tr><th>Rate</th><th>Sales ledger</th><th>CGST ledger</th><th>SGST ledger</th></tr>
         ${ch.rates.map((r) => { const k = String(r); return `<tr><td><b>${k}%</b></td><td><select class="in" data-sl="${k}">${opt(ch.sales, (s.sales_ledgers || {})[k])}</select></td>
           <td>${r ? `<select class="in" data-cg="${k}">${opt(ch.cgst, (s.cgst || {})[k])}</select>` : "-"}</td><td>${r ? `<select class="in" data-sg="${k}">${opt(ch.sgst, (s.sgst || {})[k])}</select>` : "-"}</td></tr>`; }).join("") || '<tr><td colspan="4" class="mute">Copy items from Tally first.</td></tr>'}</table></div>
+        <label class="chk"><input type="checkbox" id="sBat" ${s.send_batches ? "checked" : ""}> Send batch numbers to Tally (only if these items keep batches in Tally, with the same batch names)</label>
         <label class="chk"><input type="checkbox" id="sConf" ${s.confirmed ? "checked" : ""}> I've checked these. Send bills to Tally.</label>
         <button class="btn pri block" id="sSave">Save</button>
         <p class="small mute">Dukaan adds new vouchers to Tally and never deletes anything. The only change it makes is cancelling (with Tally’s Cancel) the vouchers of a bill you cancel.</p>
@@ -1375,6 +1574,7 @@ async function viewTally() {
   $("#sSave").onclick = async () => {
     const body = { confirmed: $("#sConf").checked, sales_ledgers: {}, cgst: {}, sgst: {} };
     for (const k of ["sales_vtype", "return_vtype", "receipt_vtype", "contra_vtype", "cash", "upi", "card", "round_off", "godown"]) body[k] = $("#s_" + k).value;
+    body.send_batches = $("#sBat").checked;
     $$("[data-sl]").forEach((x) => (body.sales_ledgers[x.dataset.sl] = x.value));
     $$("[data-cg]").forEach((x) => (body.cgst[x.dataset.cg] = x.value));
     $$("[data-sg]").forEach((x) => (body.sgst[x.dataset.sg] = x.value));
@@ -1408,6 +1608,19 @@ async function viewSettings() {
       <label class="f"><span>HSN digits needed</span><select class="in" id="bH"><option value="6" ${s.hsn_digits !== 4 ? "selected" : ""}>6 (turnover above ₹5 crore)</option><option value="4" ${s.hsn_digits === 4 ? "selected" : ""}>4 (₹5 crore or less)</option></select></label></div>
       <label class="chk"><input type="checkbox" id="bR" ${s.round ? "checked" : ""}> Round bills to the rupee</label>
       <label class="chk"><input type="checkbox" id="bCR" ${s.cashier_reports ? "checked" : ""}> Cashiers can see reports</label>
+      <h3>Stock</h3>
+      <label class="chk"><input type="checkbox" id="kW" ${s.stock_warn ? "checked" : ""}> Warn when an item is sold past its stock</label>
+      <label class="chk"><input type="checkbox" id="kB" ${s.stock_block ? "checked" : ""}> Don't allow selling past stock, or expired batches</label>
+      <label class="f"><span>Show batches as expiring within (days)</span><input class="in" id="kE" inputmode="numeric" value="${s.expiry_days || 30}" style="max-width:120px"></label>
+      <h3>Day end</h3>
+      <label class="chk"><input type="checkbox" id="kO" ${s.ask_opening ? "checked" : ""}> Ask for the opening cash when a counter starts</label>
+      <h3>Loyalty points</h3>
+      <label class="chk"><input type="checkbox" id="yOn" ${s.loyalty.enabled ? "checked" : ""}> Customers earn points (by mobile number)</label>
+      <div class="grid2"><label class="f"><span>Points for every ₹100 spent</span><input class="in" id="yP" inputmode="decimal" value="${s.loyalty.per100}"></label>
+      <label class="f"><span>Value of one point (₹)</span><input class="in" id="yV" inputmode="decimal" value="${(s.loyalty.value / 100).toFixed(2)}"></label>
+      <label class="f"><span>Can use from (points)</span><input class="in" id="yM" inputmode="numeric" value="${s.loyalty.min}"></label>
+      <label class="f"><span>Points can pay up to (% of a bill)</span><input class="in" id="yX" inputmode="numeric" value="${s.loyalty.max_pct}"></label></div>
+      <p class="small mute">Example: 1 point per ₹100 and ₹1 a point gives 1% back. Points used are a discount on the bill, so GST is on the lower amount; ask your CA if that suits you.</p>
       <label class="f"><span>Public address of this server (for bill links on WhatsApp)</span><input class="in" id="bU" value="${E(s.public_url)}" placeholder="https://dukaan.yourdomain.com"></label>
       <button class="btn pri block" style="margin-top:14px" id="sSave">Save</button>
     </div>
@@ -1428,6 +1641,8 @@ async function viewSettings() {
         shop: { name: $("#sName").value, address: $("#sAddr").value, gstin: $("#sG").value, state: $("#sSt").value, phone: $("#sPh").value, fssai: $("#sF").value, email: sh.email },
         print: { width: $("#pW").value, footer: $("#pF").value, auto: $("#pA").checked }, upi: { vpa: $("#uV").value, name: $("#uN").value },
         prefix: $("#bP").value, hsn_digits: Number($("#bH").value), round: $("#bR").checked, public_url: $("#bU").value, cashier_reports: $("#bCR").checked,
+        stock_warn: $("#kW").checked, stock_block: $("#kB").checked, expiry_days: Number($("#kE").value) || 30, ask_opening: $("#kO").checked,
+        loyalty: { enabled: $("#yOn").checked, per100: Number($("#yP").value) || 0, value: GST.paise($("#yV").value) || 0, min: Number($("#yM").value) || 0, max_pct: Number($("#yX").value) || 0 },
       });
       toast("Saved.");
       await loadBoot(true);
@@ -1459,6 +1674,250 @@ async function viewSettings() {
   $("#uAdd").onclick = () => userSheet();
   $$("[data-u]").forEach((el) => (el.onclick = () => userSheet(d.cashiers.find((c) => c.id === Number(el.dataset.u)))));
   $("#pwGo").onclick = async () => { try { await api("/api/password", { old: $("#pwO").value, new: $("#pwN").value }); toast("Password changed."); $("#pwO").value = $("#pwN").value = ""; } catch (e) { toast(e.message, true); } };
+}
+
+// ---------------------------------------------------------------- offers and loyalty (owner)
+const OFFER_KIND = { bxgy: "Buy X get Y free", off: "Off on items", bill: "Off the whole bill" };
+function offerText(o) {
+  const d = o.data || {};
+  const on = [...(d.items || []), ...(d.groups || []).map((g) => g + " (group)")];
+  const what = o.kind === "bxgy" ? `Buy ${d.buy} get ${d.free} free` : o.kind === "off" ? (d.pct ? `${d.pct}% off` : `${rs(d.amt)} off each`) + (d.min_qty ? ` from ${d.min_qty}` : "")
+    : (d.pct ? `${d.pct}% off` : `${rs(d.amt)} off`) + ` bills of ${rs(d.min_bill)} or more` + (d.max ? `, at most ${rs(d.max)}` : "");
+  const when = o.start || o.end ? ` · ${o.start ? ddmmyy(o.start) : "now"} to ${o.end ? ddmmyy(o.end) : "no end"}` : "";
+  return what + (on.length ? " · on " + on.slice(0, 4).join(", ") + (on.length > 4 ? ` +${on.length - 4}` : "") : "") + when;
+}
+async function viewOffers() {
+  let d;
+  try { d = await api("/api/offers"); } catch (e) { $("#app").innerHTML = `<div class="note bad">${E(e.message)}</div>`; return; }
+  const lo = settings().loyalty || {};
+  const today = todayISO();
+  $("#app").innerHTML = `<div class="cols">
+    <div class="card"><div class="row"><h2 class="grow" style="margin:0">Offers</h2><button class="btn pri" id="oNew">New offer</button></div>
+      <p class="small mute">Offers apply by themselves at the counter. Each item gets the one offer that saves the most, then the best bill offer. A discount typed in by hand on a line replaces its offer. The discount is shown on the bill, and GST is on what the customer pays.</p>
+      <div class="list" id="oList">${d.offers.map((o) => `<div class="it" data-o="${o.id}"><div class="grow"><b>${E(o.name)}</b>
+        ${!o.active ? '<span class="chip">off</span>' : o.end && o.end < today ? '<span class="chip">ended</span>' : o.start && o.start > today ? '<span class="chip warn">not started</span>' : '<span class="chip ok">on</span>'}
+        <div class="small mute">${E(offerText(o))}</div></div></div>`).join("") || '<div class="empty">No offers yet.</div>'}</div></div>
+    <div class="card"><h2>Loyalty points</h2>
+      ${lo.enabled ? `<p class="small">On: ${lo.per100} point${lo.per100 == 1 ? "" : "s"} for every ₹100, a point is worth ${rs(lo.value)}, used from ${lo.min} points, up to ${lo.max_pct}% of a bill. <a href="#settings">Change</a></p>`
+        : '<div class="note">Loyalty points are off. Turn them on in <a href="#settings">Settings</a>.</div>'}
+      <input class="in" id="lyQ" placeholder="Search by mobile number or name"><div class="list" id="lyList"></div></div></div>`;
+  $("#oNew").onclick = () => offerSheet(null, d.groups);
+  $$("#oList .it").forEach((el) => (el.onclick = () => offerSheet(d.offers.find((o) => o.id === Number(el.dataset.o)), d.groups)));
+  const ly = async () => {
+    try {
+      const r = await api("/api/loyalty/list?q=" + encodeURIComponent($("#lyQ").value.trim()));
+      $("#lyList").innerHTML = r.customers.map((c) => `<div class="it" data-p="${c.phone}"><div class="grow"><b>${E(c.name || c.phone)}</b><div class="small mute">${c.phone} · earned ${c.earned}, used ${c.redeemed}</div></div><b>⭐ ${c.points}</b></div>`).join("") || '<div class="empty">No customers with points yet.</div>';
+      $$("#lyList .it").forEach((el) => (el.onclick = () => pointsSheet(r.customers.find((c) => c.phone === el.dataset.p), ly)));
+    } catch (e) { $("#lyList").innerHTML = `<div class="note bad">${E(e.message)}</div>`; }
+  };
+  let t;
+  $("#lyQ").oninput = () => { clearTimeout(t); t = setTimeout(ly, 250); };
+  ly();
+}
+async function pointsSheet(c, done) {
+  let h = [];
+  try { h = (await api("/api/loyalty/history?phone=" + c.phone)).history; } catch (e) { /* */ }
+  const K = { earn: "Earned", redeem: "Used", reverse: "Returned items", undo: "Bill cancelled", adjust: "Changed by hand" };
+  sheet(`${E(c.name || c.phone)} · ⭐ ${c.points}`, `<div class="small mute">${c.phone}</div>
+    <table class="t" style="margin-top:8px">${h.map((x) => `<tr><td>${new Date(x.at * 1000).toLocaleDateString()}</td><td>${K[x.kind] || x.kind}${x.number ? " · " + E(x.number) : ""}${x.note && x.kind === "adjust" ? " · " + E(x.note) : ""}</td><td class="r">${x.points > 0 ? "+" : ""}${x.points}</td></tr>`).join("")}</table>
+    <h3>Add or take away points</h3><div class="grid2"><label class="f"><span>Points (− to take away)</span><input class="in" id="paN" inputmode="numeric"></label><label class="f"><span>Why</span><input class="in" id="paW"></label></div>`,
+  `<button class="btn pri" id="paGo">Save</button>`);
+  $("#paGo").onclick = async () => {
+    const n = parseInt($("#paN").value, 10);
+    if (!n) return toast("Enter the points.", true);
+    try { await api("/api/loyalty/adjust", { phone: c.phone, points: n, note: $("#paW").value || "-" }); toast("Saved."); closeSheet(); done(); } catch (e) { toast(e.message, true); }
+  };
+}
+function offerSheet(o, groups) {
+  o = o || { kind: "bxgy", name: "", data: { items: [], groups: [], buy: 2, free: 1 }, active: true, start: "", end: "" };
+  const d = o.data;
+  let pickedItems = [...(d.items || [])], pickedGroups = [...(d.groups || [])];
+  const s = sheet(o.id ? "Offer" : "New offer", `
+    <label class="f"><span>Kind</span><select class="in" id="ofK">${Object.entries(OFFER_KIND).map(([k, v]) => `<option value="${k}" ${k === o.kind ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+    <label class="f"><span>Name (shown on the bill)</span><input class="in" id="ofN" value="${E(o.name)}" placeholder="e.g. Buy 2 get 1 Parle-G"></label>
+    <div id="ofOn"><label class="f"><span>On these items</span><div style="position:relative"><input class="in" id="ofQ" placeholder="Search and add items"><div id="ofRes" class="card hide" style="padding:0;position:absolute;z-index:5;max-height:240px;overflow:auto;left:0;right:0"></div></div></label>
+      <div class="row wrap" id="ofItems" style="margin-top:6px"></div>
+      <label class="f"><span>or whole item groups</span><select class="in" id="ofG"><option value="">Add a group…</option>${groups.map((g) => `<option>${E(g)}</option>`).join("")}</select></label>
+      <div class="row wrap" id="ofGroups" style="margin-top:6px"></div></div>
+    <div id="ofX" class="grid2"></div>
+    <div class="grid2"><label class="f"><span>From (optional)</span><input class="in" type="date" id="ofS" value="${o.start || ""}"></label><label class="f"><span>Until (optional)</span><input class="in" type="date" id="ofE" value="${o.end || ""}"></label></div>
+    <label class="chk"><input type="checkbox" id="ofA" ${o.active ? "checked" : ""}> On</label>`,
+  `${o.id ? '<button class="btn bad" id="ofDel">Delete</button>' : ""}<button class="btn pri" id="ofOk">Save</button>`);
+  const chips = () => {
+    $("#ofItems").innerHTML = pickedItems.map((n) => `<span class="chip">${E(n)} <a href="#" data-i="${E(n)}" style="color:var(--bad);text-decoration:none">✕</a></span>`).join("");
+    $("#ofGroups").innerHTML = pickedGroups.map((n) => `<span class="chip acc">${E(n)} <a href="#" data-g="${E(n)}" style="color:var(--bad);text-decoration:none">✕</a></span>`).join("");
+    $$("#ofItems a").forEach((a) => (a.onclick = (e) => { e.preventDefault(); pickedItems = pickedItems.filter((x) => x !== a.dataset.i); chips(); }));
+    $$("#ofGroups a").forEach((a) => (a.onclick = (e) => { e.preventDefault(); pickedGroups = pickedGroups.filter((x) => x !== a.dataset.g); chips(); }));
+  };
+  const extra = () => {
+    const k = $("#ofK").value, x = o.kind === k ? d : {};
+    $("#ofOn").classList.toggle("hide", k === "bill");
+    $("#ofX").innerHTML = k === "bxgy"
+      ? `<label class="f"><span>Buy</span><input class="in" id="ofB" inputmode="numeric" value="${x.buy || 2}"></label><label class="f"><span>Get free</span><input class="in" id="ofF" inputmode="numeric" value="${x.free || 1}"></label>`
+      : k === "off" ? `<label class="f"><span>% off</span><input class="in" id="ofP" inputmode="decimal" value="${x.pct || ""}"></label><label class="f"><span>or ₹ off each</span><input class="in" id="ofAm" inputmode="decimal" value="${x.amt ? (x.amt / 100).toFixed(2) : ""}"></label>
+          <label class="f"><span>From quantity (optional)</span><input class="in" id="ofMin" inputmode="numeric" value="${x.min_qty || ""}"></label>`
+      : `<label class="f"><span>Bills of at least (₹)</span><input class="in" id="ofMb" inputmode="decimal" value="${x.min_bill ? (x.min_bill / 100).toFixed(2) : ""}"></label><label class="f"><span>% off</span><input class="in" id="ofP" inputmode="decimal" value="${x.pct || ""}"></label>
+          <label class="f"><span>or ₹ off</span><input class="in" id="ofAm" inputmode="decimal" value="${x.amt ? (x.amt / 100).toFixed(2) : ""}"></label><label class="f"><span>At most (₹, for %)</span><input class="in" id="ofMx" inputmode="decimal" value="${x.max ? (x.max / 100).toFixed(2) : ""}"></label>`;
+  };
+  $("#ofK").onchange = extra;
+  $("#ofQ").oninput = () => {
+    const r = searchItems($("#ofQ").value).slice(0, 15);
+    $("#ofRes").classList.toggle("hide", !r.length);
+    $("#ofRes").innerHTML = r.map((i, k) => `<div class="res" data-k="${k}"><div class="grow">${E(i.name)}</div><span class="small mute">${rs(i.price)}</span></div>`).join("");
+    $$("#ofRes .res").forEach((el) => (el.onclick = () => { const n = r[el.dataset.k].name; if (!pickedItems.includes(n)) pickedItems.push(n); $("#ofQ").value = ""; $("#ofRes").classList.add("hide"); chips(); }));
+  };
+  $("#ofG").onchange = () => { const g = $("#ofG").value; if (g && !pickedGroups.includes(g)) pickedGroups.push(g); $("#ofG").value = ""; chips(); };
+  $("#ofDel") && ($("#ofDel").onclick = async () => { if (!confirm("Delete this offer?")) return; await api("/api/offer/remove", { id: o.id }); closeSheet(); loadBoot(true); viewOffers(); });
+  $("#ofOk").onclick = async () => {
+    const k = $("#ofK").value, v = (id) => ($("#" + id) ? $("#" + id).value.trim() : "");
+    const body = { id: o.id, kind: k, name: $("#ofN").value, items: pickedItems, groups: pickedGroups, start: $("#ofS").value, end: $("#ofE").value, active: $("#ofA").checked };
+    if (k === "bxgy") Object.assign(body, { buy: v("ofB"), free: v("ofF") });
+    else Object.assign(body, { pct: v("ofP") || 0, amt: GST.paise(v("ofAm")) || 0, min_qty: v("ofMin"), min_bill: GST.paise(v("ofMb")) || 0, max: GST.paise(v("ofMx")) || 0 });
+    try { await api("/api/offer", body); toast("Offer saved. Counters get it when they next reload items."); closeSheet(); await loadBoot(true); viewOffers(); } catch (e) { toast(e.message, true); }
+  };
+  chips(); extra();
+  void s;
+}
+
+// ---------------------------------------------------------------- live stock
+async function refreshStock() {
+  if (!S.online || !S.boot) return;
+  try {
+    const r = await api("/api/stock");
+    for (const it of S.items) {
+      if (it.name in r.stock) it.stock = r.stock[it.name];
+      it.batches = r.batches[it.name] || [];
+      it.low = it.min_stock != null && it.stock <= it.min_stock;
+    }
+    if (S.view === "bill") renderCart();
+  } catch (e) { /* offline */ }
+}
+
+// ---------------------------------------------------------------- day end: opening cash, cash in/out, closing count
+async function daySheet(pre) {
+  const cn = counter();
+  if (!cn) return toast("Pick a counter first.", true);
+  let r = pre;
+  try { if (!r) r = await api("/api/shift?counter_id=" + cn.id); } catch (e) { return toast(e.message, true); }
+  if (!r.shift) {
+    sheet(`Start the day · ${E(cn.name)}`, `<p class="mute small">Count the cash in the drawer before the first bill. Dukaan adds the day's cash bills to it, so at closing you know what should be there.</p>
+      <label class="f"><span>Cash in the drawer now (₹)</span><input class="in" id="dOpen" inputmode="decimal" value="${r.last_kept ? (r.last_kept / 100).toFixed(2) : ""}" style="font-size:22px;font-weight:700"></label>
+      ${r.last_kept ? `<p class="small mute">${rs(r.last_kept)} was kept in the drawer at the last closing.</p>` : ""}`,
+    `<button class="btn" id="dLater">Later</button><button class="btn pri" id="dGo">Start the day</button>`);
+    $("#dLater").onclick = closeSheet;
+    $("#dGo").onclick = async () => {
+      const v = GST.paise($("#dOpen").value || "0");
+      if (isNaN(v)) return toast("That isn't an amount.", true);
+      try { await api("/api/shift/open", { counter_id: cn.id, opening: v }); toast("Day started."); closeSheet(); } catch (e) { toast(e.message, true); }
+    };
+    focusLater("#dOpen");
+    return;
+  }
+  const sh = r.shift, m = r.summary;
+  sheet(`Today · ${E(cn.name)}`, `<div class="small mute">Started ${new Date(sh.opened_at * 1000).toLocaleString()} by ${E(sh.opened_by)}</div>
+    <div class="kpis" style="margin-top:10px">
+      <div class="kpi"><div class="l">Cash should be in the drawer</div><div class="v num">${rs(m.expected)}</div></div>
+      <div class="kpi"><div class="l">Sales (${m.bills} bills)</div><div class="v num">${rs(m.sales - m.returns)}</div></div></div>
+    <table class="t" style="margin-top:10px">
+      <tr><td>Opening cash</td><td class="r num">${rs(m.opening)}</td></tr>
+      <tr><td>+ Cash on bills</td><td class="r num">${rs(m.cash)}</td></tr>
+      ${m.refund_cash ? `<tr><td>− Cash refunds</td><td class="r num">${rs(m.refund_cash)}</td></tr>` : ""}
+      ${m.cash_in ? `<tr><td>+ Cash put in</td><td class="r num">${rs(m.cash_in)}</td></tr>` : ""}
+      ${m.cash_out ? `<tr><td>− Cash taken out</td><td class="r num">${rs(m.cash_out)}</td></tr>` : ""}
+      <tr class="sum"><td>Should be in the drawer</td><td class="r num">${rs(m.expected)}</td></tr>
+      <tr><td class="mute">UPI · Card · Credit</td><td class="r num mute">${rs(m.upi)} · ${rs(m.card)} · ${rs(m.credit)}</td></tr></table>
+    ${m.moves.length ? `<h3>Cash in / out</h3>${m.moves.map((x) => `<div class="small">${x.kind === "in" ? "+" : "−"}${rs(x.amount)} · ${E(x.reason)} · ${E(x.by)}</div>`).join("")}` : ""}
+    ${S.queue.length ? `<div class="note">${S.queue.length} bill(s) from this device aren't sent yet, so they aren't counted here.</div>` : ""}`,
+  `<button class="btn" id="dMove">Cash in / out</button><button class="btn pri" id="dClose">Close the day</button>`);
+  $("#dMove").onclick = () => cashMoveSheet(cn);
+  $("#dClose").onclick = () => closeDaySheet(cn, r);
+}
+function cashMoveSheet(cn) {
+  sheet("Cash in / out of the drawer", `<div class="seg"><button class="on" data-k="out">Taken out</button><button data-k="in">Put in</button></div>
+    <label class="f"><span>Amount (₹)</span><input class="in" id="mAmt" inputmode="decimal"></label>
+    <label class="f"><span>What for</span><input class="in" id="mWhy" placeholder="e.g. tea, milk supplier, change from bank"></label>
+    <p class="small mute">This is only for the drawer count. Put shop expenses into Tally as usual.</p>`,
+  `<button class="btn pri" id="mGo">Save</button>`);
+  let kind = "out";
+  $$(".sheet .seg button").forEach((b) => (b.onclick = () => { kind = b.dataset.k; $$(".sheet .seg button").forEach((x) => x.classList.toggle("on", x === b)); }));
+  $("#mGo").onclick = async () => {
+    const a = GST.paise($("#mAmt").value);
+    if (!(a > 0)) return toast("Enter the amount.", true);
+    try { await api("/api/shift/move", { counter_id: cn.id, kind, amount: a, reason: $("#mWhy").value }); toast("Saved."); daySheet(); } catch (e) { toast(e.message, true); }
+  };
+  focusLater("#mAmt");
+}
+async function closeDaySheet(cn, r) {
+  if (S.queue.length) {
+    await sync();
+    if (S.queue.length) return toast(`${S.queue.length} bill(s) haven't reached the server yet. Connect, let them send, then close the day.`, true);
+    r = await api("/api/shift?counter_id=" + cn.id);
+  }
+  const den = r.denoms;
+  sheet("Close the day: count the cash", `<div class="tw"><table class="t"><tr><th>Note / coin</th><th class="r">How many</th><th class="r">Amount</th></tr>
+    ${den.map((d) => `<tr><td>₹${d / 100}</td><td class="r"><input class="in" data-d="${d}" inputmode="numeric" style="width:90px;text-align:right"></td><td class="r num" id="dv${d}">-</td></tr>`).join("")}
+    <tr class="sum"><td>Counted</td><td></td><td class="r num" id="dCount">${rs(0)}</td></tr>
+    <tr><td>Should be</td><td></td><td class="r num">${rs(r.summary.expected)}</td></tr>
+    <tr class="sum"><td id="dDiffL">Difference</td><td></td><td class="r num" id="dDiff"></td></tr></table></div>
+    <label class="f"><span>Kept in the drawer for tomorrow (₹)</span><input class="in" id="dKeep" inputmode="decimal" placeholder="0"></label>
+    <div class="small mute" id="dHand"></div>
+    <label class="f"><span>Note (optional)</span><input class="in" id="dNote" placeholder="e.g. ₹50 short, a torn note"></label>`,
+  `<button class="btn" id="dBack">Back</button><button class="btn pri" id="dDone">Close the day</button>`);
+  const counted = () => $$("[data-d]").reduce((a, i) => a + Number(i.dataset.d) * (parseInt(i.value, 10) || 0), 0);
+  const upd = () => {
+    $$("[data-d]").forEach((i) => ($(`#dv${i.dataset.d}`).textContent = i.value ? rs(Number(i.dataset.d) * (parseInt(i.value, 10) || 0)) : "-"));
+    const c = counted(), diff = c - r.summary.expected;
+    $("#dCount").textContent = rs(c);
+    $("#dDiffL").textContent = diff === 0 ? "Matches" : diff < 0 ? "Short" : "Extra";
+    $("#dDiff").textContent = rs(Math.abs(diff));
+    $("#dDiff").style.color = diff === 0 ? "var(--ok)" : "var(--bad)";
+    const keep = GST.paise($("#dKeep").value || "0") || 0;
+    $("#dHand").textContent = `Hand over ${rs(Math.max(0, c - keep))} to the owner.`;
+  };
+  $$(".sheet input").forEach((i) => i.addEventListener("input", upd));
+  upd();
+  $("#dBack").onclick = () => daySheet();
+  $("#dDone").onclick = async () => {
+    const denoms = {};
+    $$("[data-d]").forEach((i) => { const n = parseInt(i.value, 10) || 0; if (n) denoms[i.dataset.d] = n; });
+    const keep = GST.paise($("#dKeep").value || "0");
+    if (isNaN(keep)) return toast("Kept for tomorrow isn't an amount.", true);
+    const diff = counted() - r.summary.expected;
+    if (diff !== 0 && !confirm(`The cash is ${diff < 0 ? "short" : "extra"} by ${rs(Math.abs(diff))}. Close the day anyway?`)) return;
+    try {
+      const x = await api("/api/shift/close", { counter_id: cn.id, denoms, kept: keep, note: $("#dNote").value });
+      closedSheet(x.closed, cn);
+    } catch (e) { toast(e.message, true); }
+  };
+}
+function closingHTML(sh, cn) {
+  const m = sh.summary, sh0 = shopInfo();
+  const row = (a, b) => `<tr><td>${a}</td><td class="r">${b}</td></tr>`;
+  return `<div class="rc"><div class="c big">${E(sh0.name || "")}</div><div class="c b">DAY CLOSING</div><hr>
+    <div>${E(cn ? cn.name : sh.counter || "")}</div><div>Opened ${new Date(sh.opened_at * 1000).toLocaleString()} (${E(sh.opened_by)})</div>
+    <div>Closed ${new Date(sh.closed_at * 1000).toLocaleString()} (${E(sh.closed_by)})</div><hr><table>
+    ${row(`Bills: ${m.bills}`, GST.rs(m.sales))}${m.returns ? row(`Returns: ${m.return_count}`, "-" + GST.rs(m.returns)) : ""}
+    ${row("Cash", GST.rs(m.cash))}${row("UPI", GST.rs(m.upi))}${row("Card", GST.rs(m.card))}${m.credit ? row("Credit", GST.rs(m.credit)) : ""}
+    ${m.discount ? row("Discounts given", GST.rs(m.discount)) : ""}${m.cancelled ? row("Cancelled bills", m.cancelled) : ""}</table><hr><table>
+    ${row("Opening cash", GST.rs(m.opening))}${row("+ Cash bills", GST.rs(m.cash))}${m.refund_cash ? row("- Cash refunds", GST.rs(m.refund_cash)) : ""}
+    ${m.cash_in ? row("+ Cash in", GST.rs(m.cash_in)) : ""}${m.cash_out ? row("- Cash out", GST.rs(m.cash_out)) : ""}
+    ${row("<b>Should be</b>", "<b>" + GST.rs(sh.expected) + "</b>")}${row("<b>Counted</b>", "<b>" + GST.rs(sh.counted) + "</b>")}
+    ${row(sh.diff === 0 ? "Difference" : sh.diff < 0 ? "<b>SHORT</b>" : "<b>EXTRA</b>", "<b>" + GST.rs(Math.abs(sh.diff)) + "</b>")}</table><hr><table>
+    ${Object.entries(sh.denoms || {}).sort((a, b) => b[0] - a[0]).map(([d, n]) => row(`Rs ${d / 100} x ${n}`, GST.rs(d * n))).join("")}</table><hr><table>
+    ${row("Kept in drawer", GST.rs(sh.kept || 0))}${row("Handed over", GST.rs(sh.counted - (sh.kept || 0)))}</table>
+    ${sh.note ? `<div>Note: ${E(sh.note)}</div>` : ""}<br><div>Signature: ____________</div></div>`;
+}
+function closedSheet(sh, cn) {
+  sheet("Day closed", `<div class="note ${sh.diff === 0 ? "ok" : "bad"}">${sh.diff === 0 ? "The cash matches." : `The cash is ${sh.diff < 0 ? "short" : "extra"} by <b>${rs(Math.abs(sh.diff))}</b>.`} Hand over ${rs(sh.counted - (sh.kept || 0))}.</div>
+    <div class="preview" style="width:320px">${closingHTML(sh, cn)}</div>`,
+  `<button class="btn" id="cPr">Print</button><button class="btn pri" id="cOkX">Done</button>`);
+  $("#cPr").onclick = () => {
+    const w = (settings().print || {}).width || "80";
+    $("#pagestyle").textContent = "@media print{" + (w === "a4" ? "@page{size:A4;margin:12mm}" : `@page{size:${w}mm auto;margin:2mm} #printarea{width:${w === "58" ? 52 : 74}mm}`) + "}";
+    $("#printarea").innerHTML = closingHTML(sh, cn);
+    setTimeout(() => doPrint(), 50);
+  };
+  $("#cOkX").onclick = closeSheet;
 }
 
 // ---------------------------------------------------------------- labels (owner)
@@ -1621,6 +2080,15 @@ function viewLabels() {
   const opt = () => { st.opts = { taxes: $("#oTax").checked, packed: $("#oPack").checked, fssai: $("#oFssai").checked }; save(); draw(); };
   $("#oTax").onchange = $("#oPack").onchange = $("#oFssai").onchange = opt;
   $("#lPrint").onclick = () => printLabels(st);
+  if (S.labelPrefill) {
+    const pf = S.labelPrefill;
+    S.labelPrefill = null;
+    const it = S.byName[pf.item];
+    if (it) pick(it);
+    if (pf.mfd) $("#lMfd").value = pf.mfd;
+    if (pf.exp) $("#lExp").value = pf.exp;
+    if (pf.copies) $("#lCopies").value = pf.copies;
+  }
   draw(); drawList();
 }
 function printLabels(st) {
@@ -1640,7 +2108,7 @@ function printLabels(st) {
   }
   $("#pagestyle").textContent = "@media print{" + css + "}";
   $("#printarea").innerHTML = html;
-  setTimeout(() => window.print(), 80);
+  setTimeout(() => doPrint(), 80);
 }
 
 start();

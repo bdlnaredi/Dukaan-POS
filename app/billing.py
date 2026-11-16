@@ -13,6 +13,8 @@ from datetime import date, datetime
 
 import db
 import gst as G
+import loyalty
+import stock
 import vouchers as V
 
 UID = re.compile(r"^[A-Za-z0-9-]{8,40}$")
@@ -44,10 +46,12 @@ BARCODE = re.compile(r"^[0-9A-Za-z-]{4,32}$")
 
 def items(include_hidden=False):
     rows = db.rows("""SELECT i.name, i.parent, i.unit, i.hsn t_hsn, i.gst t_gst, i.gst_from, i.price t_price, i.mrp t_mrp,
-        i.aliases, i.stock, l.price, l.mrp, l.barcodes, l.loose, l.fav, l.hsn, l.gst, l.hidden, u.decimals
+        i.aliases, i.stock, l.price, l.mrp, l.barcodes, l.loose, l.fav, l.hsn, l.gst, l.hidden, l.min_stock, u.decimals
         FROM item i LEFT JOIN item_local l ON l.name=i.name LEFT JOIN unit u ON u.name=i.unit ORDER BY i.name""")
     out = []
     hsn_digits = (db.get("settings", {}) or {}).get("hsn_digits", 6)
+    live = stock.live()
+    bat = stock.batch_summary()
     for r in rows:
         if r["hidden"] and not include_hidden:
             continue
@@ -76,7 +80,10 @@ def items(include_hidden=False):
             "decimals": r["decimals"] if r["decimals"] is not None else (3 if r["loose"] else 0),
             "hsn": hsn, "gst": g, "gst_from": "dukaan" if r["gst"] is not None else (r["gst_from"] or ""),
             "price": price, "mrp": mrp, "codes": sorted(set(codes)), "aliases": [a for a in aliases if a not in codes],
-            "stock": r["stock"], "loose": bool(r["loose"]), "fav": bool(r["fav"]), "hidden": bool(r["hidden"]),
+            "stock": live.get(r["name"], r["stock"]), "tally_stock": r["stock"], "min_stock": r["min_stock"],
+            "low": r["min_stock"] is not None and live.get(r["name"], r["stock"] or 0) <= r["min_stock"],
+            "batches": bat.get(r["name"], []),
+            "loose": bool(r["loose"]), "fav": bool(r["fav"]), "hidden": bool(r["hidden"]),
             "tally": {"hsn": r["t_hsn"] or "", "gst": r["t_gst"], "price": r["t_price"] or 0, "mrp": r["t_mrp"] or 0},
             "issues": issues, "can_sell": g is not None and bool(hsn) and not (mrp and price > mrp),
         })
@@ -194,6 +201,19 @@ def accept(p, sess):
     data = {"buyer": buyer, "lines": lines, "bill_disc": bill["bill_disc"], "round": bill["round"], "payments": pays,
             "tendered": p.get("tendered") if isinstance(p.get("tendered"), int) else None,
             "counter": counter["name"], "offline": bool(p.get("offline"))}
+    offers_used = []
+    for o in (p.get("offers") or [])[:30]:
+        if isinstance(o, dict) and isinstance(o.get("amount"), int) and o["amount"] > 0:
+            offers_used.append({"id": o.get("id"), "name": _s(o.get("name"), 60), "amount": o["amount"]})
+    if offers_used:
+        data["offers"] = offers_used
+    redeem = p.get("loyalty") if isinstance(p.get("loyalty"), dict) else None
+    if redeem and isinstance(redeem.get("points"), int) and redeem["points"] > 0 and isinstance(redeem.get("value"), int):
+        data["loyalty"] = {"points": redeem["points"], "value": redeem["value"]}
+        if redeem["value"] > bill["bill_disc"]:
+            flags.append("Points used are worth more than the bill discount")
+    else:
+        redeem = None
     flag = "; ".join(dict.fromkeys(flags))
     with db.tx() as c:
         clash = c.execute("SELECT uid FROM bill WHERE kind='sale' AND number=?", (num,)).fetchone()
@@ -213,6 +233,14 @@ def accept(p, sess):
                    calc["amount"] if calc else (stated or 0), flag, link))
         c.execute("""INSERT INTO numbering(counter_id, fy, kind, last) VALUES(?, ?, 'sale', ?)
             ON CONFLICT(counter_id, fy, kind) DO UPDATE SET last=MAX(last, excluded.last)""", (counter["id"], fy, n))
+        if calc:
+            stock.allocate(c, uid, day.isoformat(), calc)
+            earned, lflag = loyalty.on_sale(c, uid, num_store, buyer, calc, data.get("loyalty"))
+            if earned or lflag:
+                data["points_earned"] = earned
+                if lflag:
+                    flag = (flag + "; " if flag else "") + lflag
+                c.execute("UPDATE bill SET data=?, flag=? WHERE uid=?", (json.dumps(data), flag, uid))
     return {"uid": uid, "number": num_store, "status": "ok", "flag": flag, "link": link}
 
 
@@ -297,6 +325,8 @@ def make_return(p, sess):
                   (uid, num, fy, counter["id"], sess.get("cashier_id"), sess.get("name"), today,
                    datetime.now().strftime("%H:%M:%S"), time.time(), time.time(), json.dumps(data), json.dumps(calc),
                    calc["amount"], secrets.token_urlsafe(9), orig["uid"]))
+        stock.give_back(c, uid, orig["uid"], lines)
+        loyalty.on_return(c, uid, orig["uid"], calc["amount"], orig["amount"])
     db.log(sess.get("name"), f"Return {num} against {orig['number']}: {G.rs(calc['amount'])}")
     return {"uid": uid, "number": num, "status": "ok", "amount": calc["amount"]}
 
@@ -326,8 +356,10 @@ def cancel(uid, sess, reason):
     if in_tally and not gst_period_open(b["date"]):
         raise ValueError("GSTR-1 for this bill's month is already due, so it can't be cancelled now. Take the goods back as a return (credit note) instead.")
     with db.tx() as c:
-        c.execute("UPDATE bill SET status='cancelled', tally=?, tally_error='', cancelled_by=?, cancel_reason=? WHERE uid=?",
-                  ("cancelling" if in_tally else "skip", sess.get("name"), reason, uid))
+        c.execute("UPDATE bill SET status='cancelled', tally=?, tally_error='', cancelled_by=?, cancel_reason=?, cancelled_at=? WHERE uid=?",
+                  ("cancelling" if in_tally else "skip", sess.get("name"), reason, time.time(), uid))
+        stock.release(c, uid)
+        loyalty.on_cancel(c, uid)
         c.execute("DELETE FROM post WHERE bill_uid=? AND status IN ('queued', 'failed')", (uid,))
     db.log(sess.get("name"), f"Cancelled {b['number']}{' (and in Tally)' if in_tally else ''}: {reason}")
     return {"in_tally": in_tally}
@@ -359,6 +391,13 @@ def plan(b, setup, info):
     tag = lambda seq: f" [dk:{b['uid']}-{seq}]"
     who = f" by {b['cashier']}" if b["cashier"] else ""
     cust = " ".join(x for x in (buyer.get("name"), buyer.get("phone")) if x)
+    bats = None
+    if setup.get("send_batches"):
+        used = stock.bill_batches(b["uid"])
+        if b["kind"] == "sale":
+            bats = used
+        else:            # a return's batch rows are kept under the original bill's line numbers
+            bats = {j: used.get(l.get("index"), []) for j, l in enumerate(data["lines"])}
     out = []
     if b["kind"] == "sale":
         pays = data["payments"]
@@ -370,7 +409,7 @@ def plan(b, setup, info):
             party, debtor = buyer["ledger"], is_debtor(buyer["ledger"])
             out.append(("sales", f"Bill {b['number']} to {party}", V.invoice(
                 setup, company, info, sale=True, day=b["date"], number=b["number"], party=party, debtor=debtor,
-                calc=calc, units=units, buyer=buyer, narration=base + tag(1))))
+                calc=calc, units=units, buyer=buyer, narration=base + tag(1), batches=bats)))
             for i, x in enumerate(pays, 2):
                 out.append(("receipt", f"Receipt {G.rs(x['amount'])} {MODE_NAMES[x['mode']]} for bill {b['number']}", V.receipt(
                     setup, company, day=b["date"], party=party, account=led[x["mode"]], amount=x["amount"], bill_no=b["number"],
@@ -380,7 +419,7 @@ def plan(b, setup, info):
             party = led["cash"] if ("cash" in modes or not modes) else led[modes[0]]
             out.append(("sales", f"Bill {b['number']}", V.invoice(
                 setup, company, info, sale=True, day=b["date"], number=b["number"], party=party, debtor=False,
-                calc=calc, units=units, buyer=buyer, narration=base + tag(1))))
+                calc=calc, units=units, buyer=buyer, narration=base + tag(1), batches=bats)))
             seq = 2
             for x in pays:
                 if led[x["mode"]] != party:
@@ -397,5 +436,5 @@ def plan(b, setup, info):
                + (f" Customer: {cust}." if cust else ""))
         out.append(("creditnote", f"Return {b['number']}", V.invoice(
             setup, company, info, sale=False, day=b["date"], number=b["number"], party=party, debtor=debtor,
-            calc=calc, units=units, buyer=buyer, narration=nar + tag(1), ref=(data["orig_number"], data["orig_date"]))))
+            calc=calc, units=units, buyer=buyer, narration=nar + tag(1), ref=(data["orig_number"], data["orig_date"]), batches=bats)))
     return out

@@ -76,7 +76,27 @@ On the **Items** page:
 
 Keyboard on the PC: **F2** search, **F8** pay, **F4** customer, **F3** hold, **Enter** in the empty search box opens payment.
 
+## The Android app
+
+1. On the phone, open **github.com/bdlnaredi/Dukaan-POS/releases/tag/android**, download **Dukaan.apk**, and tap it to install. Allow "install unknown apps" for the browser when Android asks.
+2. Open Dukaan, enter the server address (the https one, e.g. `https://dukaan.yourdomain.com`), and sign in.
+3. The camera button uses Google's scanner, so there's no camera permission to give. Print uses Android's print screen; Bluetooth printers still go through RawBT.
+4. When a new version is built, the app asks to update itself.
+
+**One-time, so the app can update itself:** the app must be signed with the same key every time. In the Dukaan-POS repo on GitHub, open Settings › Secrets and variables › Actions and add `DUKAAN_KEYSTORE_B64` and `DUKAAN_KEYSTORE_PASSWORD`. Copying the same two values you set for Bahi (`BAHI_KEYSTORE_B64`, `BAHI_KEYSTORE_PASSWORD`) is fine. Then run the "Android app" workflow again. Without them the app still builds, but each new version has to be uninstalled and installed fresh.
+
+## Stock, batches and offers
+
+- **Reorder levels:** Items › an item › Reorder level. Items at or below it show under **Low stock**.
+- **Batches:** Items › an item › Add a batch, when stock comes in (batch no., quantity, MFD, EXP). **Expiring** lists batches past their date or within the days set in Settings. Use **Labels** on a batch to print its labels.
+- **Batch names in Tally:** only if your items keep batches in Tally with the same names. Tick it on the Tally page.
+- **Offers:** the Offers page. They apply by themselves at the counter.
+- **Loyalty points:** turn them on in Settings › Loyalty points. The cashier enters the customer's mobile number under Customer, and points show at payment. Points used are a discount on the bill; ask your CA how they want loyalty treated.
+
 ## 7. Every day
+
+- **Morning:** each counter asks for the opening cash. You can turn this off in Settings.
+- **Closing:** menu › **Day end / cash** › **Close the day**. Count the notes and coins, then print the slip.
 
 - **Reports › Today** at closing: cash in the drawer, UPI, card and credit, and GST by rate.
 - **Tally** page: bills **refused** by Tally show the reason (for example a ledger renamed in Tally). Fix it, then **try all again**. Bills **marked for you** need a look before they go.

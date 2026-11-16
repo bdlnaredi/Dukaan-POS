@@ -38,7 +38,26 @@ CREATE TABLE IF NOT EXISTS post(id INTEGER PRIMARY KEY, bill_uid TEXT, seq INT, 
 CREATE INDEX IF NOT EXISTS post_bill ON post(bill_uid);
 CREATE TABLE IF NOT EXISTS held(id TEXT PRIMARY KEY, counter_id INT, cashier TEXT, data TEXT, created REAL);
 CREATE TABLE IF NOT EXISTS log(id INTEGER PRIMARY KEY, at REAL, who TEXT, what TEXT);
+CREATE TABLE IF NOT EXISTS batch(id INTEGER PRIMARY KEY, item TEXT, batch_no TEXT, mfd TEXT, exp TEXT, qm INT, mrp INT,
+  note TEXT, added REAL, added_by TEXT, active INT DEFAULT 1);
+CREATE INDEX IF NOT EXISTS batch_item ON batch(item);
+CREATE TABLE IF NOT EXISTS batch_use(id INTEGER PRIMARY KEY, bill_uid TEXT, line INT, batch_id INT, qm INT);
+CREATE INDEX IF NOT EXISTS batch_use_bill ON batch_use(bill_uid);
+CREATE INDEX IF NOT EXISTS batch_use_batch ON batch_use(batch_id);
+CREATE TABLE IF NOT EXISTS offer(id INTEGER PRIMARY KEY, name TEXT, kind TEXT, data TEXT, start TEXT, end TEXT,
+  active INT DEFAULT 1, created REAL);
+CREATE TABLE IF NOT EXISTS loyalty(phone TEXT PRIMARY KEY, name TEXT, points INT DEFAULT 0, earned INT DEFAULT 0,
+  redeemed INT DEFAULT 0, first REAL, updated REAL);
+CREATE TABLE IF NOT EXISTS loyalty_log(id INTEGER PRIMARY KEY, phone TEXT, bill_uid TEXT, kind TEXT, points INT, at REAL, note TEXT);
+CREATE INDEX IF NOT EXISTS loyalty_log_bill ON loyalty_log(bill_uid);
+CREATE TABLE IF NOT EXISTS shift(id INTEGER PRIMARY KEY, counter_id INT, opened_by TEXT, opened_at REAL, opening INT,
+  closed_by TEXT, closed_at REAL, counted INT, denoms TEXT, expected INT, diff INT, kept INT, note TEXT, summary TEXT);
+CREATE TABLE IF NOT EXISTS cash_move(id INTEGER PRIMARY KEY, shift_id INT, counter_id INT, at REAL, kind TEXT, amount INT,
+  reason TEXT, by TEXT);
 """
+
+# columns added after the first version (ALTER TABLE ADD COLUMN, once)
+COLUMNS = [("item_local", "min_stock", "REAL"), ("bill", "cancelled_at", "REAL")]
 
 _local = threading.local()
 write_lock = threading.RLock()
@@ -59,6 +78,10 @@ def conn():
 def init():
     with write_lock:
         conn().executescript(SCHEMA)
+        for table, col, typ in COLUMNS:
+            have = {r["name"] for r in conn().execute(f"PRAGMA table_info({table})")}
+            if col not in have:
+                conn().execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
 
 
 class tx:

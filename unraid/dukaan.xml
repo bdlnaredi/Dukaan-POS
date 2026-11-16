@@ -18,6 +18,8 @@
   <License>GPL-3.0</License>
   <Requires>TallyPrime with its XML server on (F1 Help › Settings › Connectivity: acts as Both, port 9000) on a PC this server can reach. Setup guide: https://github.com/bdlnaredi/Dukaan-POS/blob/main/docs/INSTALL.md. For camera scanning and installing on phones, reach it over https (Cloudflare Tunnel or Tailscale).</Requires>
   <Changes>
+### 0.3.0
+- Live stock and low-stock list, batches with expiry, offers, loyalty points, day-end cash closing, Android app
 ### 0.2.0
 - Product labels with MFD, EXP, MRP, price, savings and barcode
 - Cancel bills that are already in Tally (Tally's Cancel, nothing deleted)

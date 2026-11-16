@@ -1,0 +1,68 @@
+name: Android app
+
+on:
+  push:
+    branches: [main]
+    paths: ["android/**", ".github/workflows/android.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.DUKAAN_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/dukaan.keystore"
+            echo "DUKAAN_KEYSTORE=$RUNNER_TEMP/dukaan.keystore" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No signing key set (secret DUKAAN_KEYSTORE_B64). This APK can't be updated by later builds."
+          fi
+
+      - name: Build
+        env:
+          DUKAAN_VERSION_CODE: ${{ github.run_number }}
+          DUKAAN_KEYSTORE_PASSWORD: ${{ secrets.DUKAAN_KEYSTORE_PASSWORD }}
+          DUKAAN_KEY_ALIAS: ${{ secrets.DUKAAN_KEY_ALIAS }}
+        run: |
+          set -o pipefail
+          if ! gradle -p android --no-daemon assembleRelease 2>&1 | tee build.log; then
+            grep -E "error:|e: |What went wrong|FAILED|Could not|cannot find symbol|incompatible|Execution failed" build.log | head -25 | while IFS= read -r l; do echo "::warning::$l"; done
+            exit 1
+          fi
+          cp android/app/build/outputs/apk/release/app-release.apk Dukaan.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Dukaan-apk
+          path: Dukaan.apk
+
+      - name: Publish to the "android" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Dukaan Android app 1.${{ github.run_number }}. Download Dukaan.apk on your phone and tap it to install.
+
+          versionCode: ${{ github.run_number }}"
+          if gh release view android >/dev/null 2>&1; then
+            gh release edit android --title "Android app 1.${{ github.run_number }}" --notes "$notes"
+          else
+            gh release create android --title "Android app 1.${{ github.run_number }}" --notes "$notes" --latest=false
+          fi
+          gh release upload android Dukaan.apk --clobber

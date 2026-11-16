@@ -22,6 +22,7 @@ def summary(frm, to):
     refunds = {"cash": 0, "upi": 0, "card": 0, "credit": 0}
     cashiers, counters, rates, items, days = {}, {}, {}, {}, {}
     savings = disc = 0
+    offer_use, points = {}, {"used": 0, "value": 0, "earned": 0}
     for b in _bills(frm, to):
         calc, data = json.loads(b["calc"] or "null"), json.loads(b["data"])
         if not calc:
@@ -37,6 +38,14 @@ def summary(frm, to):
             modes["credit"] += calc["amount"] - paid
             savings += calc.get("savings", 0)
             disc += sum(l["disc"] for l in calc["lines"])
+            for o in data.get("offers", []):
+                u = offer_use.setdefault(o["name"], {"name": o["name"], "bills": 0, "amount": 0})
+                u["bills"] += 1
+                u["amount"] += o["amount"]
+            if data.get("loyalty"):
+                points["used"] += data["loyalty"]["points"]
+                points["value"] += data["loyalty"]["value"]
+            points["earned"] += data.get("points_earned", 0)
         else:
             rets += calc["amount"]
             n_r += 1
@@ -68,7 +77,7 @@ def summary(frm, to):
             "cashiers": sorted(cashiers.items(), key=lambda x: -x[1]), "counters": sorted(counters.items(), key=lambda x: -x[1]),
             "rates": sorted(rates.values(), key=lambda r: (r["gst"] is None, r["gst"] or 0)),
             "top": sorted(items.values(), key=lambda x: -x["amount"])[:25], "days": sorted(days.values(), key=lambda d: d["date"]),
-            "savings": savings, "discount": disc, "not_in_tally": pending, "flagged": flagged, "cancelled": cancelled}
+            "savings": savings, "discount": disc, "offers": sorted(offer_use.values(), key=lambda x: -x["amount"]), "points": points, "not_in_tally": pending, "flagged": flagged, "cancelled": cancelled}
 
 
 def hsn(frm, to):

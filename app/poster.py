@@ -140,7 +140,7 @@ def _cancel_bill(b, u, company):
         hits = found.get(p["tag"], [])
         if not hits or all(h["cancelled"] for h in hits):
             with db.tx() as c:          # never reached Tally, or already cancelled there
-                c.execute("UPDATE post SET status='cancelled', done=? WHERE id=?", (time.time(), p["id"]))
+                c.execute("UPDATE post SET status='cancelled' WHERE id=?", (p["id"],))
             continue
         h = next(h for h in hits if not h["cancelled"])
         if len(hits) > 1 or not h["number"] or found["_numbers"].get((h["vtype"], h["number"]), 0) != 1:
@@ -159,7 +159,7 @@ def _cancel_bill(b, u, company):
             return False
         if again and all(x["cancelled"] for x in again):
             with db.tx() as c:
-                c.execute("UPDATE post SET status='cancelled', done=? WHERE id=?", (time.time(), p["id"]))
+                c.execute("UPDATE post SET status='cancelled' WHERE id=?", (p["id"],))
         else:
             _, errs = tally.import_result(text)
             msg = f"{p['label']}: Tally didn't cancel it. " + ("; ".join(errs) or text.strip()[:200])

@@ -2,7 +2,7 @@ name: Build image
 on:
   push:
     branches: [main]
-    paths: ["app/**", "Dockerfile", "CHANGELOG.md", ".github/workflows/docker.yml"]
+    paths: ["app/**", "tests/**", "Dockerfile", "CHANGELOG.md", ".github/workflows/docker.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -22,6 +22,8 @@ jobs:
         run: python tests/gst_compare.py
       - name: Server against a stand-in Tally
         run: python tests/test_server.py
+      - name: Stock, batches, offers, points, day end
+        run: python tests/test_features.py
   build:
     needs: test
     runs-on: ubuntu-latest

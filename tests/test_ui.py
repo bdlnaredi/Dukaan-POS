@@ -70,6 +70,9 @@ try:
         pg.click(".keypad button[data-k='OK']")
         pg.wait_for_selector("text=Which counter is this?")
         pg.click(".sheet .it")
+        pg.wait_for_selector("#dOpen")          # asks for the opening cash
+        pg.fill("#dOpen", "1500")
+        pg.click("#dGo")
         pg.wait_for_selector("#q")
         # barcode typed into the search box (what a USB scanner does)
         pg.fill("#q", "8904043901015")

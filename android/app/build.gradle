@@ -1,0 +1,54 @@
+plugins {
+    id "com.android.application"
+}
+
+def ver = (System.getenv("DUKAAN_VERSION_CODE") ?: "1").toInteger()
+
+android {
+    namespace "com.bdlnaredi.dukaan"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.bdlnaredi.dukaan"
+        minSdk 24
+        targetSdk 34
+        versionCode ver
+        versionName "1." + ver
+    }
+
+    signingConfigs {
+        release {
+            // the signing key comes from the build machine (GitHub Actions); it is never stored in the repository
+            def ks = System.getenv("DUKAAN_KEYSTORE")
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv("DUKAAN_KEYSTORE_PASSWORD")
+                // the same key as the Bahi app works too (its alias is "bahi"); set DUKAAN_KEY_ALIAS for another
+                keyAlias System.getenv("DUKAAN_KEY_ALIAS") ?: "bahi"
+                keyPassword System.getenv("DUKAAN_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (System.getenv("DUKAAN_KEYSTORE")) signingConfig signingConfigs.release
+            else signingConfig signingConfigs.debug
+        }
+    }
+    buildFeatures { buildConfig true }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation "androidx.core:core:1.13.1"
+    implementation "androidx.webkit:webkit:1.11.0"
+    // barcode scanning with Google's ready-made scanner screen (no camera permission needed)
+    implementation "com.google.android.gms:play-services-code-scanner:16.1.0"
+    // one Kotlin version for every library (the scanner brings an older one; two copies won't build)
+    implementation platform("org.jetbrains.kotlin:kotlin-bom:1.8.22")
+}

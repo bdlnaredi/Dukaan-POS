@@ -60,7 +60,7 @@ def _head(vt, day, number, party, narration, extra=""):
 
 
 def invoice(setup, company, info, *, sale, day, number, party, debtor, calc, units, buyer, narration,
-            ref=None):
+            ref=None, batches=None):
     """A Sales voucher (sale=True) or Credit Note (sale=False) for calc (gst.compute's answer).
     party: the ledger debited for a sale (Cash, the UPI bank, or the customer); debtor: it's a customer ledger
     (then the bill is tracked bill-wise). ref: (number, date) of the original bill, for a return."""
@@ -93,16 +93,26 @@ def invoice(setup, company, info, *, sale, day, number, party, debtor, calc, uni
         "</LEDGERENTRIES.LIST>", bills + "</LEDGERENTRIES.LIST>")
     deemed = "No" if sale else "Yes"
     godown = setup.get("godown") or "Main Location"
-    for l in calc["lines"]:
+    for i, l in enumerate(calc["lines"]):
         unit = units.get(l["item"], "")
         q = _qty(l["qm"], unit)
         amt = _a(sign * l["taxable"])
         ledger = setup["sales_ledgers"][f"{l['gst']:g}"]
+        # batch allocations: the line's batches (when batches are sent to Tally), the rest from Primary Batch
+        parts = [(n, qm) for n, qm in (batches or {}).get(i, []) if n and qm > 0]
+        rest = l["qm"] - sum(qm for _, qm in parts)
+        if rest > 0 or not parts:
+            parts.append(("Primary Batch", rest if parts else l["qm"]))
+        ballocs, given = "", 0
+        for k, (bn, qm) in enumerate(parts):
+            share = l["taxable"] - given if k == len(parts) - 1 else G.round_div(l["taxable"] * qm, l["qm"])
+            given += share
+            bq = _qty(qm, unit)
+            ballocs += (f"<BATCHALLOCATIONS.LIST><GODOWNNAME>{esc(godown)}</GODOWNNAME><BATCHNAME>{esc(bn)}</BATCHNAME>"
+                        f"<AMOUNT>{_a(sign * share)}</AMOUNT><ACTUALQTY>{bq}</ACTUALQTY><BILLEDQTY>{bq}</BILLEDQTY></BATCHALLOCATIONS.LIST>")
         body += (f"<ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>{esc(l['item'])}</STOCKITEMNAME>"
                  f"<ISDEEMEDPOSITIVE>{deemed}</ISDEEMEDPOSITIVE><RATE>{rate_for(l['taxable'], l['qm'])}/{esc(unit)}</RATE>"
-                 f"<AMOUNT>{amt}</AMOUNT><ACTUALQTY>{q}</ACTUALQTY><BILLEDQTY>{q}</BILLEDQTY>"
-                 f"<BATCHALLOCATIONS.LIST><GODOWNNAME>{esc(godown)}</GODOWNNAME><BATCHNAME>Primary Batch</BATCHNAME>"
-                 f"<AMOUNT>{amt}</AMOUNT><ACTUALQTY>{q}</ACTUALQTY><BILLEDQTY>{q}</BILLEDQTY></BATCHALLOCATIONS.LIST>"
+                 f"<AMOUNT>{amt}</AMOUNT><ACTUALQTY>{q}</ACTUALQTY><BILLEDQTY>{q}</BILLEDQTY>" + ballocs +
                  f"<ACCOUNTINGALLOCATIONS.LIST><LEDGERNAME>{esc(ledger)}</LEDGERNAME><ISDEEMEDPOSITIVE>{deemed}</ISDEEMEDPOSITIVE>"
                  f"<AMOUNT>{amt}</AMOUNT></ACCOUNTINGALLOCATIONS.LIST></ALLINVENTORYENTRIES.LIST>")
     cg, sg = {}, {}

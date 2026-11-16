@@ -57,6 +57,30 @@ Stock goes out of the godown you choose. Every figure is worked out again on the
 - An item with no barcode gets one with **Make one**: an EAN-13 starting 21 (the range for codes used inside a shop). It's saved on the item, so it scans at the counter straight away.
 - Label printer rolls (50×25, 38×25, 50×30, 50×38, 75×50, 100×50 mm) or A4 sheets (65, 40 or 24 labels), with "labels already used" for part-used sheets.
 
+### Stock
+- **Live stock:** Tally's stock from the last copy, less what Dukaan has sold since that isn't in Tally's figure yet. The counters refresh it every minute.
+- **Reorder level** per item, a **Low stock** list, and a warning when a cashier sells more than is in stock. Settings can make that a block instead.
+- **Batches and expiry:** enter stock as it arrives, with batch number, MFD, EXP and quantity.
+  - Sales take the batch that expires first and skip expired ones; returns go back to their batch.
+  - The **Expiring** list shows what's past its date or close to it.
+  - An item whose batches have all expired is flagged at the counter.
+  - Print labels straight from a batch.
+  - Batch names can also go to Tally, if your items keep batches there.
+
+### Offers and loyalty
+- **Offers:** buy X get Y free, % or ₹ off items or whole item groups (optionally from a quantity), and % or ₹ off bills above an amount, each with optional dates. The counter applies the best offer by itself, and the bill shows it.
+- **Loyalty points** by the customer's mobile number:
+  - earned per ₹100, used at payment (from a minimum, up to a % of the bill);
+  - taken back on returns and cancels;
+  - the owner can see every customer's points and history, and add or take away points.
+
+### Day end
+- Start the day with the **opening cash**, and record **cash in/out** (tea, change from the bank).
+- **Close the day** by counting notes and coins. Dukaan shows what should be in the drawer, whether it's short or extra, and what to hand over, and prints a closing slip. Closings are listed in Reports.
+
+### Android app
+- **Dukaan.apk** is on the repo's [android release](https://github.com/bdlnaredi/Dukaan-POS/releases/tag/android). It has the phone's barcode scanner, printing, RawBT and WhatsApp, and updates itself.
+
 ### For the owner
 - Cashiers sign in with a PIN. You choose who can give discounts, take returns or give credit.
 - Labels page for product labels (above).

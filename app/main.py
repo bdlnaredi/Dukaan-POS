@@ -26,8 +26,12 @@ import masters  # noqa: E402
 import poster  # noqa: E402
 import reports  # noqa: E402
 import tally  # noqa: E402
+import loyalty  # noqa: E402
+import offers  # noqa: E402
+import shifts  # noqa: E402
+import stock  # noqa: E402
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 PORT = int(os.environ.get("PORT", "2510"))
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 VPA = re.compile(r"^[A-Za-z0-9.\-_]{2,256}@[A-Za-z][A-Za-z0-9.\-]{1,63}$")
@@ -36,6 +40,8 @@ DEFAULT_SETTINGS = {
     "shop": {"name": "", "address": "", "phone": "", "gstin": "", "state": "", "fssai": "", "email": ""},
     "prefix": "", "round": True, "hsn_digits": 6, "public_url": "", "tally_url": "", "refresh_minutes": 30,
     "upi": {"vpa": "", "name": ""}, "print": {"width": "80", "footer": "Thank you! Visit again.", "auto": False},
+    "stock_warn": True, "stock_block": False, "expiry_days": 30, "ask_opening": True,
+    "loyalty": dict(loyalty.DEFAULTS),
 }
 
 
@@ -159,6 +165,30 @@ def api(method, path, q, body, sess, ip):
             raise Err(403, str(e))
         poster.wake()
         return r
+    if path == "/api/stock":
+        return {"stock": stock.live(), "batches": stock.batch_summary(), "at": time.time()}
+    if path == "/api/loyalty":
+        ph = re.sub(r"\D", "", (q.get("phone") or [""])[0])[-10:]
+        if not loyalty.PHONE.match(ph):
+            raise Err(400, "That isn't a 10-digit mobile number.")
+        return {"customer": loyalty.get(ph), "settings": loyalty.settings()}
+    if path.startswith("/api/shift/") or path == "/api/shift":
+        cid = int(body.get("counter_id") or (q.get("counter_id") or ["0"])[0] or 0)
+        if not db.one("SELECT 1 x FROM counter WHERE id=?", (cid,)):
+            raise Err(404, "No such counter.")
+        if path == "/api/shift/open" and method == "POST":
+            shifts.open_shift(cid, body.get("opening"), sess["name"])
+        elif path == "/api/shift/move" and method == "POST":
+            shifts.move(cid, body.get("kind"), body.get("amount"), body.get("reason"), sess["name"])
+        elif path == "/api/shift/close" and method == "POST":
+            done = shifts.close(cid, body.get("denoms") or {}, body.get("kept"), body.get("note"), sess["name"])
+            done["summary"] = json.loads(done["summary"])
+            done["denoms"] = json.loads(done["denoms"] or "{}")
+            return {"closed": done}
+        sh = shifts.current(cid)
+        last = db.one("SELECT kept, closed_at FROM shift WHERE counter_id=? AND closed_at IS NOT NULL ORDER BY id DESC LIMIT 1", (cid,))
+        return {"shift": sh, "summary": shifts.summary(sh) if sh else None, "last_kept": (last or {}).get("kept") or 0,
+                "denoms": shifts.DENOMS}
     if path == "/api/qr":
         amount = int((q.get("amount") or ["0"])[0] or 0)
         uri = upi_uri(amount, (q.get("note") or [""])[0])
@@ -188,6 +218,36 @@ def api(method, path, q, body, sess, ip):
         return {"items": billing.items(include_hidden=True)}
     if path == "/api/item" and method == "POST":
         return save_item(body)
+    if path == "/api/batches":
+        f = (q.get("filter") or [""])[0]
+        item = (q.get("item") or [""])[0] or None
+        days = int(settings().get("expiry_days") or 30)
+        rows = stock.expiring(days) if f == "expiring" else stock.batches(item, include_empty=f == "all")
+        return {"batches": rows, "expiry_days": days}
+    if path == "/api/batch" and method == "POST":
+        bid = stock.add_batch(body, sess["name"])
+        return {"id": bid, "batches": stock.batches(body.get("item"))}
+    if path == "/api/batch/remove" and method == "POST":
+        stock.remove_batch(int(body.get("id") or 0), sess["name"])
+        return {"ok": True}
+    if path == "/api/offers":
+        return {"offers": offers.all_offers(), "groups": sorted({i["group"] for i in billing.items(include_hidden=True) if i["group"]})}
+    if path == "/api/offer" and method == "POST":
+        offers.save(body, sess["name"])
+        return {"offers": offers.all_offers()}
+    if path == "/api/offer/remove" and method == "POST":
+        offers.remove(int(body.get("id") or 0), sess["name"])
+        return {"offers": offers.all_offers()}
+    if path == "/api/loyalty/list":
+        return {"customers": loyalty.customers((q.get("q") or [""])[0])}
+    if path == "/api/loyalty/history":
+        return {"history": loyalty.history(re.sub(r"\D", "", (q.get("phone") or [""])[0])[-10:])}
+    if path == "/api/loyalty/adjust" and method == "POST":
+        loyalty.adjust(re.sub(r"\D", "", str(body.get("phone") or ""))[-10:], int(body.get("points") or 0), str(body.get("note") or ""), sess["name"])
+        return {"ok": True}
+    if path == "/api/shifts":
+        today = date.today().isoformat()
+        return {"shifts": shifts.history(_day(q, "from", today), _day(q, "to", today))}
     if path == "/api/item/newcode" and method == "POST":
         return new_code(str(body.get("name") or ""))
     if path == "/api/settings":
@@ -241,6 +301,8 @@ def api(method, path, q, body, sess, ip):
         for k in ("sales_vtype", "return_vtype", "receipt_vtype", "contra_vtype", "cash", "upi", "card", "round_off", "godown"):
             if k in body:
                 cur[k] = str(body[k] or "")
+        if "send_batches" in body:
+            cur["send_batches"] = bool(body["send_batches"])
         for k in ("sales_ledgers", "cgst", "sgst"):
             if isinstance(body.get(k), dict):
                 cur[k] = {str(a): str(b) for a, b in body[k].items()}
@@ -277,8 +339,10 @@ def boot(sess):
     setup = db.get("tally_setup", {}) or {}
     pub = {"shop": shop, "round": s["round"], "prefix": s["prefix"], "upi": bool(s["upi"].get("vpa")),
            "upi_vpa": s["upi"].get("vpa", ""), "upi_name": s["upi"].get("name") or shop["name"],
-           "print": s["print"], "public_url": s["public_url"].rstrip("/")}
+           "print": s["print"], "public_url": s["public_url"].rstrip("/"), "stock_warn": s["stock_warn"],
+           "stock_block": s["stock_block"], "ask_opening": s["ask_opening"], "loyalty": s["loyalty"]}
     return {"me": _me(sess), "settings": pub, "items": [i for i in billing.items() if not i["hidden"]],
+            "offers": offers.for_counters(),
             "customers": billing.customers(), "counters": db.rows("SELECT id, name, series, device FROM counter WHERE active=1 ORDER BY id"),
             "numbers": {c["id"]: {fy: billing.last_number(c["id"], fy) for fy in _fys()}
                         for c in db.rows("SELECT id FROM counter WHERE active=1")},
@@ -365,12 +429,23 @@ def save_item(d):
     hsn = re.sub(r"\s", "", str(d.get("hsn") or ""))[:10] or None
     if hsn and not re.fullmatch(r"\d{4,8}", hsn):
         raise Err(400, "An HSN code is 4 to 8 digits.")
+    ms = d.get("min_stock")
+    if ms in (None, ""):
+        ms = None
+    else:
+        try:
+            ms = float(ms)
+        except (TypeError, ValueError):
+            raise Err(400, "The reorder level isn't a number.")
+        if ms < 0:
+            raise Err(400, "The reorder level can't be below zero.")
     with db.tx() as c:
-        c.execute("""INSERT INTO item_local(name, price, mrp, barcodes, loose, fav, hsn, gst, hidden, updated) VALUES(?,?,?,?,?,?,?,?,?,?)
+        c.execute("""INSERT INTO item_local(name, price, mrp, barcodes, loose, fav, hsn, gst, hidden, min_stock, updated) VALUES(?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(name) DO UPDATE SET price=excluded.price, mrp=excluded.mrp, barcodes=excluded.barcodes, loose=excluded.loose,
-            fav=excluded.fav, hsn=excluded.hsn, gst=excluded.gst, hidden=excluded.hidden, updated=excluded.updated""",
+            fav=excluded.fav, hsn=excluded.hsn, gst=excluded.gst, hidden=excluded.hidden, min_stock=excluded.min_stock,
+            updated=excluded.updated""",
                   (name, price, mrp, json.dumps(codes), 1 if d.get("loose") else 0, 1 if d.get("fav") else 0, hsn, g,
-                   1 if d.get("hidden") else 0, time.time()))
+                   1 if d.get("hidden") else 0, ms, time.time()))
     if g is not None or hsn:
         db.log("Owner", f"Set {name} in Dukaan: HSN {hsn or '-'}, GST {g if g is not None else '-'} (not changed in Tally)")
     return {"item": next(i for i in billing.items(include_hidden=True) if i["name"] == name)}
@@ -443,6 +518,21 @@ def save_settings(d):
                         "footer": str(d["print"].get("footer") or "")[:300], "auto": bool(d["print"].get("auto"))}
     if "cashier_reports" in d:
         cur["cashier_reports"] = bool(d["cashier_reports"])
+    for k in ("stock_warn", "stock_block", "ask_opening"):
+        if k in d:
+            cur[k] = bool(d[k])
+    if "expiry_days" in d:
+        cur["expiry_days"] = max(1, min(365, int(d["expiry_days"] or 30)))
+    if isinstance(d.get("loyalty"), dict):
+        L = d["loyalty"]
+        try:
+            lo = {"enabled": bool(L.get("enabled")), "per100": float(L.get("per100") or 0), "value": int(L.get("value") or 0),
+                  "min": int(L.get("min") or 0), "max_pct": int(L.get("max_pct") or 0)}
+        except (TypeError, ValueError):
+            raise Err(400, "Check the loyalty numbers.")
+        if lo["enabled"] and (not 0 < lo["per100"] <= 100 or not 0 < lo["value"] <= 100000 or not 0 < lo["max_pct"] <= 100):
+            raise Err(400, "Check the loyalty numbers: points per Rs 100, value of a point, and the most of a bill points can pay.")
+        cur["loyalty"] = lo
     db.put("settings", cur)
     return {"settings": settings()}
 
