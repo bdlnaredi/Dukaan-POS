@@ -106,6 +106,14 @@ Turned off, or if the online store can't be reached, Dukaan bills on its own exa
 2. **Server:** on Unraid, Apps › search **dukaan** › Install, and set the owner password. Or use [docker-compose.yml](docker-compose.yml).
 3. Open `http://SERVER-IP:2510`, sign in as the owner, and follow the **[setup guide](docs/INSTALL.md)**.
 
+**No server? Use the Windows app.** Download **Dukaan-Setup.exe** from [Releases → Windows app](../../releases/tag/windows-latest) and run it. If Windows shows "Windows protected your PC", click **More info**, then **Run anyway**. The first time it opens, choose one:
+- **Run Dukaan on this computer.** Best when TallyPrime is on the same PC: set the Tally address in Dukaan to `http://localhost:9000`.
+  - You choose the owner's password there. Bills and stock are saved in `%LOCALAPPDATA%\Dukaan\data`, and are backed up every night.
+  - Dukaan keeps running with an icon in the taskbar corner. **Phones and other computers…** in that icon's menu shows the address (and a QR code) for phones and other counters on the same Wi-Fi.
+- **Open my Dukaan server.** Type your server's address (e.g. `http://192.168.1.10:2510`). This PC becomes a billing counter in its own window, with printing as usual.
+
+To switch later, use **Dukaan - change setup** in the Start menu.
+
 ## Before you rely on it
 
 Run Dukaan alongside your current billing for a week or two. Have your CA check a few bills and the vouchers they make in Tally, especially the GST rates and HSN codes on your items. Dukaan works out GST from what is in Tally, so a wrong rate in Tally will be wrong on the bill too.

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+- **Windows app** (Dukaan-Setup.exe, built by GitHub Actions and published under Releases → Windows app):
+  - It can run Dukaan on the PC itself (handy when TallyPrime is on the same PC), with the owner's password chosen in the app, a taskbar icon, Start with Windows, and the address and QR code for phones on the same Wi-Fi.
+  - Or it can open an existing Dukaan server as a billing counter in its own window.
+  - The installer allows Dukaan through Windows Firewall and adds Start menu shortcuts. Uninstalling keeps your data.
+- `main.serve()` starts Dukaan without blocking, so the Windows app can run it.
+
 ## 0.4.0
 - **Online store link (StoreKart)**, off until the owner turns it on in Settings → Online store link:
   - Online orders put their items aside here as soon as they're placed, so live stock and the counters show it straight away.

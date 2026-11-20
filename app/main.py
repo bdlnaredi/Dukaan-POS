@@ -32,7 +32,7 @@ import shifts  # noqa: E402
 import stock  # noqa: E402
 import link  # noqa: E402
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 PORT = int(os.environ.get("PORT", "2510"))
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 VPA = re.compile(r"^[A-Za-z0-9.\-_]{2,256}@[A-Za-z][A-Za-z0-9.\-]{1,63}$")
@@ -699,19 +699,31 @@ class H(BaseHTTPRequestHandler):
 link.settings_fn = settings
 
 
+_started = False
+
+
+def serve(port=None, host="0.0.0.0"):
+    """Open the database, start the Tally poster once, and return a server ready to serve_forever()."""
+    global _started
+    if not _started:
+        db.init()
+        if not db.rows("SELECT 1 FROM counter"):
+            with db.tx() as c:
+                c.execute("INSERT INTO counter(name, series, active) VALUES('Counter 1', 'A', 1)")
+        poster.start()
+        _started = True
+    port = port or PORT
+    srv = ThreadingHTTPServer((host, port), H)
+    srv.daemon_threads = True
+    print(f"Dukaan {VERSION} on port {port}", flush=True)
+    return srv
+
+
 def main():
     if not os.environ.get("APP_PASSWORD") and not os.path.exists(db.DB_PATH):
         print("Set APP_PASSWORD (the owner's password) for the container.", file=sys.stderr)
         sys.exit(1)
-    db.init()
-    if not db.rows("SELECT 1 FROM counter"):
-        with db.tx() as c:
-            c.execute("INSERT INTO counter(name, series, active) VALUES('Counter 1', 'A', 1)")
-    poster.start()
-    srv = ThreadingHTTPServer(("0.0.0.0", PORT), H)
-    srv.daemon_threads = True
-    print(f"Dukaan {VERSION} on port {PORT}", flush=True)
-    srv.serve_forever()
+    serve().serve_forever()
 
 
 if __name__ == "__main__":
