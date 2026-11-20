@@ -52,12 +52,13 @@ CREATE TABLE IF NOT EXISTS loyalty_log(id INTEGER PRIMARY KEY, phone TEXT, bill_
 CREATE INDEX IF NOT EXISTS loyalty_log_bill ON loyalty_log(bill_uid);
 CREATE TABLE IF NOT EXISTS shift(id INTEGER PRIMARY KEY, counter_id INT, opened_by TEXT, opened_at REAL, opening INT,
   closed_by TEXT, closed_at REAL, counted INT, denoms TEXT, expected INT, diff INT, kept INT, note TEXT, summary TEXT);
+CREATE TABLE IF NOT EXISTS link_reserve(order_id TEXT, number TEXT, item TEXT, qm INT, created REAL, PRIMARY KEY(order_id, item));
 CREATE TABLE IF NOT EXISTS cash_move(id INTEGER PRIMARY KEY, shift_id INT, counter_id INT, at REAL, kind TEXT, amount INT,
   reason TEXT, by TEXT);
 """
 
 # columns added after the first version (ALTER TABLE ADD COLUMN, once)
-COLUMNS = [("item_local", "min_stock", "REAL"), ("bill", "cancelled_at", "REAL")]
+COLUMNS = [("item_local", "min_stock", "REAL"), ("bill", "cancelled_at", "REAL"), ("cashier", "ext", "TEXT")]
 
 _local = threading.local()
 write_lock = threading.RLock()

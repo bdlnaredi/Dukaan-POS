@@ -41,10 +41,16 @@ def adjustments():
     return out
 
 
+def reserved():
+    """{item: thousandths} put aside for online orders that aren't bills yet (see link.py)."""
+    return {r["item"]: r["q"] for r in db.rows("SELECT item, SUM(qm) q FROM link_reserve GROUP BY item")}
+
+
 def live():
-    """{item: live stock (in units)} for every item copied from Tally."""
+    """{item: live stock (in units)} for every item copied from Tally, less what online orders have put aside."""
     adj = adjustments()
-    return {r["name"]: round((r["stock"] or 0) + adj.get(r["name"], 0) / 1000, 3)
+    res = reserved()
+    return {r["name"]: round((r["stock"] or 0) + (adj.get(r["name"], 0) - res.get(r["name"], 0)) / 1000, 3)
             for r in db.rows("SELECT name, stock FROM item")}
 
 

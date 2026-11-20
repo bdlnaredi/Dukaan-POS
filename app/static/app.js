@@ -220,10 +220,22 @@ async function showLogin() {
   let hello = { cashiers: [] };
   try { hello = await api("/api/hello"); } catch (e) { $("#lgErr").innerHTML = `<div class="note bad">${E(e.message)}</div>`; }
   $("#lgShop").textContent = hello.shop || "Dukaan";
+  if (hello.storekart_login) $("#login .seg").insertAdjacentHTML("beforeend", '<button data-k="storekart">Online store login</button>');
   const seg = $$("#login .seg button");
   seg.forEach((b) => (b.onclick = () => { seg.forEach((x) => x.classList.toggle("on", x === b)); body(b.dataset.k); }));
   const body = (k) => {
     const el = $("#lgBody");
+    if (k === "storekart") {
+      el.innerHTML = `<p class="small mute" style="margin-top:0">Use your StoreKart (online store) login. Owners and admins sign in as the owner; managers and cashiers as cashiers.</p>
+        <label class="f"><span>Login name</span><input class="in" id="lgU" autocapitalize="none" autocomplete="username"></label>
+        <label class="f"><span>Password / PIN</span><input class="in" type="password" id="lgSP" autocomplete="current-password"></label>
+        <button class="btn pri block big" style="margin-top:14px" id="lgGo">Sign in</button>`;
+      const go = () => login({ kind: "storekart", username: $("#lgU").value, password: $("#lgSP").value });
+      $("#lgGo").onclick = go;
+      $("#lgSP").onkeydown = (e) => { if (e.key === "Enter") go(); };
+      $("#lgU").focus();
+      return;
+    }
     if (k === "owner" || !hello.cashiers.length) {
       if (!hello.cashiers.length) { seg[1].classList.add("on"); seg[0].classList.remove("on"); }
       el.innerHTML = `<label class="f"><span>Owner password</span><input class="in" type="password" id="lgPw" autocomplete="current-password"></label>
@@ -1631,6 +1643,7 @@ async function viewSettings() {
       <div class="card" style="margin-top:12px"><h2>Cashiers</h2>
         <div class="list">${d.cashiers.map((c) => `<div class="it" data-u="${c.id}"><div class="grow"><b>${E(c.name)}</b> ${c.active ? "" : '<span class="chip">off</span>'}<div class="small mute">${[c.can_discount && "discounts", c.can_return && "returns", c.can_credit && "credit"].filter(Boolean).join(", ") || "billing only"}</div></div></div>`).join("") || '<div class="empty">No cashiers yet.</div>'}</div>
         <button class="btn" id="uAdd">Add cashier</button></div>
+      <div class="card" style="margin-top:12px" id="linkCard"><h2>Online store link (StoreKart)</h2><div class="small mute">Loading…</div></div>
       <div class="card" style="margin-top:12px"><h2>Owner password</h2>
         <div class="grid2"><label class="f"><span>Current</span><input class="in" type="password" id="pwO"></label><label class="f"><span>New</span><input class="in" type="password" id="pwN"></label></div>
         <button class="btn" style="margin-top:10px" id="pwGo">Change password</button></div>
@@ -1674,6 +1687,37 @@ async function viewSettings() {
   $("#uAdd").onclick = () => userSheet();
   $$("[data-u]").forEach((el) => (el.onclick = () => userSheet(d.cashiers.find((c) => c.id === Number(el.dataset.u)))));
   $("#pwGo").onclick = async () => { try { await api("/api/password", { old: $("#pwO").value, new: $("#pwN").value }); toast("Password changed."); $("#pwO").value = $("#pwN").value = ""; } catch (e) { toast(e.message, true); } };
+  linkCard();
+}
+
+// ---------------------------------------------------------------- online store link (owner)
+async function linkCard() {
+  const box = $("#linkCard");
+  if (!box) return;
+  let L;
+  try { L = await api("/api/link/settings"); } catch (e) { box.innerHTML = `<h2>Online store link (StoreKart)</h2><div class="note bad">${E(e.message)}</div>`; return; }
+  const seen = L.last_seen ? new Date(L.last_seen * 1000).toLocaleString("en-IN") : "never";
+  const held = {};
+  L.reserved.forEach((r) => { (held[r.order_id] = held[r.order_id] || { number: r.number, items: [] }).items.push(`${r.item} × ${GST.qty ? GST.qty(r.qm) : r.qm / 1000}`); });
+  box.innerHTML = `<h2>Online store link (StoreKart)</h2>
+    <p class="small mute" style="margin-top:0">When it's on, online orders put their items aside here as soon as they're placed, and become bills in series <b>${E(L.series)}</b> (then go to Tally) once they're completed and paid. Turned off, Dukaan works on its own as usual.</p>
+    <label class="chk"><input type="checkbox" id="lkOn" ${L.enabled ? "checked" : ""}> Link with the online store</label>
+    <label class="f"><span>Online store address</span><input class="in" id="lkUrl" value="${E(L.storekart_url)}" placeholder="https://shop.yourdomain.com"></label>
+    <div class="grid2"><label class="f"><span>Bill series for online orders</span><input class="in" id="lkSer" value="${E(L.series)}" maxlength="3" style="text-transform:uppercase"></label>
+    <label class="chk" style="align-self:end"><input type="checkbox" id="lkStaff" ${L.staff_login ? "checked" : ""}> Staff can sign in with either app's login</label></div>
+    ${L.key ? `<label class="f"><span>Link key — paste this into StoreKart (Settings → Connect Dukaan)</span><input class="in" id="lkKey" value="${E(L.key)}" readonly onclick="this.select()"></label>` : ""}
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn pri" id="lkSave">Save</button>
+      ${L.key ? '<button class="btn" id="lkCopy">Copy key</button><button class="btn" id="lkTest">Test connection</button><button class="btn ghost" id="lkNew">New key</button>' : ""}</div>
+    <p class="small mute">Last heard from the online store: ${E(seen)}</p>
+    ${Object.keys(held).length ? `<h3>Put aside for online orders</h3><div class="list">${Object.entries(held).map(([id, h]) => `<div class="it"><div class="grow"><b>Order #${E(h.number || id)}</b><div class="small mute">${h.items.map(E).join(", ")}</div></div></div>`).join("")}</div>` : ""}`;
+  const save = async (extra) => {
+    try { await api("/api/link/settings", { enabled: $("#lkOn").checked, storekart_url: $("#lkUrl").value, series: $("#lkSer").value, staff_login: $("#lkStaff").checked, ...extra }); toast("Saved."); linkCard(); }
+    catch (e) { toast(e.message, true); }
+  };
+  $("#lkSave").onclick = () => save();
+  if ($("#lkNew")) $("#lkNew").onclick = () => { if (confirm("Make a new key? The online store stops working with Dukaan until you paste the new key there.")) save({ new_key: true }); };
+  if ($("#lkCopy")) $("#lkCopy").onclick = async () => { try { await navigator.clipboard.writeText(L.key); toast("Key copied."); } catch (e) { $("#lkKey").select(); } };
+  if ($("#lkTest")) $("#lkTest").onclick = async () => { try { const r = await api("/api/link/test", {}); toast(`Connected${r.store ? " to " + r.store : ""}.`); } catch (e) { toast(e.message, true); } };
 }
 
 // ---------------------------------------------------------------- offers and loyalty (owner)

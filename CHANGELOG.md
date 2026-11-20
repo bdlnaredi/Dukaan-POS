@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+- **Online store link (StoreKart)**, off until the owner turns it on in Settings → Online store link:
+  - Online orders put their items aside here as soon as they're placed, so live stock and the counters show it straight away.
+  - Completed, paid orders become bills in their own series (W/2627/1 …). They go into Tally like any counter bill and earn loyalty points.
+  - A cancelled order gives its stock back, or cancels its bill (Tally's own Cancel) if it was already made.
+  - StoreKart owner/admin can sign in here as the owner, and managers and cashiers as cashiers ("Online store login" on the sign-in screen). Dukaan cashiers can sign in to StoreKart with their name and PIN.
+  - Turned off, or with the online store unreachable, Dukaan works on its own as before.
+- tests/test_link.py: Dukaan, StoreKart and the fake Tally together.
+
 ## 0.3.0
 - Live stock: Tally's stock less Dukaan bills that Tally's count doesn't have yet, refreshed on the counters every minute; reorder level per item, "Low stock" list, warning (or block, in Settings) when selling past stock
 - Batches and expiry: enter batches with batch no., MFD, EXP and quantity; sales take the batch that expires first and skip expired ones; returns go back to their batch; "Expiring" list; warning (or block) for items with only expired batches; print labels for a batch; optional batch names to Tally

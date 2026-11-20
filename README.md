@@ -74,6 +74,18 @@ Stock goes out of the godown you choose. Every figure is worked out again on the
   - taken back on returns and cancels;
   - the owner can see every customer's points and history, and add or take away points.
 
+### Online store (StoreKart)
+Optional: link Dukaan with **StoreKart**, the self-hosted online store, in Settings → **Online store link**. Paste the link key into StoreKart, and then:
+- **Live stock:** the website shows Dukaan's live stock and can't sell more than there is.
+- **Order placed:** its items are put aside here at once; the counters and Live stock see it straight away.
+- **Order completed and paid:** it becomes a bill in its own series (**W**/2627/1 …). The bill goes into Tally like any counter bill and earns the customer loyalty points.
+- **Order cancelled:** its stock comes back, or its bill is cancelled (Tally's Cancel).
+- **One login for both apps:**
+  - StoreKart owners and admins sign in here as the owner, managers and cashiers as cashiers ("Online store login" on the sign-in screen).
+  - Dukaan cashiers can sign in to the online store with their name and PIN.
+
+Turned off, or if the online store can't be reached, Dukaan bills on its own exactly as before.
+
 ### Day end
 - Start the day with the **opening cash**, and record **cash in/out** (tea, change from the bank).
 - **Close the day** by counting notes and coins. Dukaan shows what should be in the drawer, whether it's short or extra, and what to hand over, and prints a closing slip. Closings are listed in Reports.

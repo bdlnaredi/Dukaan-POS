@@ -70,6 +70,10 @@ def login(d, ip):
             _failed("pin:" + name)
             raise PermissionError("Name or PIN isn't right.")
         who = {"cashier_id": c["id"], "role": "cashier", "name": c["name"]}
+    return start_session(who, device)
+
+
+def start_session(who, device):
     tok = secrets.token_urlsafe(24)
     with db.tx() as c:
         c.execute("INSERT INTO session(token, cashier_id, role, name, device, created, seen) VALUES(?,?,?,?,?,?,?)",

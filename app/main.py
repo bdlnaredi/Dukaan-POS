@@ -30,8 +30,9 @@ import loyalty  # noqa: E402
 import offers  # noqa: E402
 import shifts  # noqa: E402
 import stock  # noqa: E402
+import link  # noqa: E402
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 PORT = int(os.environ.get("PORT", "2510"))
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 VPA = re.compile(r"^[A-Za-z0-9.\-_]{2,256}@[A-Za-z][A-Za-z0-9.\-]{1,63}$")
@@ -103,10 +104,14 @@ def api(method, path, q, body, sess, ip):
     if path == "/api/hello":
         return {"version": VERSION, "shop": s["shop"].get("name") or (db.get("tally_company_info") or {}).get("name", ""),
                 "cashiers": [c["name"] for c in auth.cashiers() if c["active"]],
-                "owner_set": bool(db.get("owner_pw") or os.environ.get("APP_PASSWORD"))}
+                "owner_set": bool(db.get("owner_pw") or os.environ.get("APP_PASSWORD")),
+                "storekart_login": bool(link.cfg()["enabled"] and link.cfg()["staff_login"] and link.cfg()["storekart_url"])}
     if path == "/api/login" and method == "POST":
         try:
-            tok, me = auth.login(body, ip)
+            if body.get("kind") == "storekart":
+                tok, me = link.login_storekart(body, ip)
+            else:
+                tok, me = auth.login(body, ip)
         except PermissionError as e:
             raise Err(401, str(e))
         return {"token": tok, "me": _me(me)}
@@ -320,6 +325,16 @@ def api(method, path, q, body, sess, ip):
         return tally_status()
     if path == "/api/log":
         return {"log": db.rows("SELECT * FROM log ORDER BY id DESC LIMIT 300")}
+    if path == "/api/link/settings":
+        if method == "POST":
+            return link.save_cfg(body, sess["name"])
+        return link.public_cfg()
+    if path == "/api/link/test" and method == "POST":
+        try:
+            r = link.call_storekart("api/link/hello", {})
+        except PermissionError as e:
+            raise Err(400, str(e))
+        return {"ok": True, "store": r.get("store", "")}
     raise Err(404, "Not found")
 
 
@@ -624,6 +639,14 @@ class H(BaseHTTPRequestHandler):
                         raise Err(413, "Too much data at once.")
                     raw = self.rfile.read(n) if n else b"{}"
                     body = json.loads(raw or b"{}")
+                if path.startswith("/api/link/") and path not in ("/api/link/settings", "/api/link/test"):
+                    ip = self.headers.get("X-Forwarded-For", self.client_address[0]).split(",")[0].strip()
+                    if not link.key_ok(self.headers.get("X-Link-Key")):
+                        raise Err(401, "The link key isn't right, or the online store link is off in Dukaan.")
+                    try:
+                        return self._json(200, link.api(method, path, parse_qs(u.query), body, ip))
+                    except PermissionError as e:
+                        raise Err(401 if path == "/api/link/verify" else 403, str(e))
                 tok = self.headers.get("X-Dukaan-Token") or ""
                 sess = auth.session(tok)
                 if sess:
@@ -671,6 +694,9 @@ class H(BaseHTTPRequestHandler):
         if path in ("/index.html", "/sw.js"):
             data = data.replace(b"__VERSION__", VERSION.encode())
         self._send(200, data, ctype, {"Cache-Control": "no-cache"})
+
+
+link.settings_fn = settings
 
 
 def main():
